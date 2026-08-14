@@ -29,6 +29,7 @@ BASE_CONFIG = {
         "global_max_replies_per_hour": 10,
         "min_delay_seconds": 1,
         "max_delay_seconds": 2,
+        "cross_device_dedup_seconds": 0,   # 默认关闭，跨端去重由专门的用例覆盖
     },
     "rules": [
         {"name": "在吗", "match": {"type": "keyword", "any": ["在吗"]}, "reply": "在的"},
@@ -307,3 +308,88 @@ def test_corrupt_state_file_does_not_crash(tmp_path):
     state.write_text("{not json", encoding="utf-8")
     engine = ReplyEngine(build_config(BASE_CONFIG), state_path=state, clock=FakeClock())
     assert engine.decide(msg("在吗")).should_reply
+
+
+# ------------------------------------------------------- 跨端去重（多端同时在线）
+
+
+DEDUP_CONFIG = {
+    **BASE_CONFIG,
+    "limits": {**BASE_CONFIG["limits"], "cross_device_dedup_seconds": 120},
+}
+
+
+def test_android_and_macos_do_not_both_reply():
+    """微信多端同时在线：同一条消息安卓和 macOS 各上报一次，只能回一次。
+
+    这是最容易踩的坑——两端上报的 chat_id 前缀不同
+    （android:com.tencent.mm:小王 vs macos:小王），如果拿 chat_id 当键，
+    冷却会分裂成两套，对方就收到两条一模一样的自动回复。
+    """
+    engine, _ = make_engine(DEDUP_CONFIG)
+
+    from_android = engine.decide(
+        msg("在吗", chat_id="android:com.tencent.mm:小王", platform="android")
+    )
+    from_macos = engine.decide(msg("在吗", chat_id="macos:小王", platform="macos"))
+
+    assert from_android.should_reply
+    assert not from_macos.should_reply
+    assert "跨端去重" in from_macos.reason
+
+
+def test_cooldown_shared_across_platforms():
+    """即使内容不同，两端也该共享同一份冷却额度。"""
+    engine, clock = make_engine(DEDUP_CONFIG)
+    assert engine.decide(msg("在吗", chat_id="android:xx:小王")).should_reply
+    clock.advance(200)  # 超过去重窗口，但没过冷却
+    decision = engine.decide(msg("忙吗", chat_id="macos:小王"))
+    assert not decision.should_reply
+    assert "冷却中" in decision.reason
+
+
+def test_dedup_window_expires():
+    engine, clock = make_engine(DEDUP_CONFIG)
+    engine.decide(msg("在吗", chat_id="android:xx:小王"))
+    clock.advance(121)   # 去重窗口过了
+    clock.advance(600)   # 冷却也过了
+    assert engine.decide(msg("在吗", chat_id="macos:小王")).should_reply
+
+
+def test_different_text_not_deduped():
+    """内容不同就不是同一条消息，不该被去重挡掉（此时只受冷却约束）。"""
+    engine, clock = make_engine(
+        {**DEDUP_CONFIG, "limits": {**DEDUP_CONFIG["limits"], "per_chat_cooldown_seconds": 0}}
+    )
+    assert engine.decide(msg("在吗", chat_id="android:xx:小王")).should_reply
+    assert engine.decide(msg("在不在", chat_id="macos:小王")).should_reply
+
+
+def test_group_member_count_not_part_of_identity():
+    """群名里的成员数会变，不该被当成新会话。"""
+    engine, _ = make_engine(DEDUP_CONFIG)
+    first = engine.decide(
+        msg("在吗", chat_id="a", chat_name="项目组(8)", is_group=True, mentioned_me=True)
+    )
+    second = engine.decide(
+        msg("在吗", chat_id="b", chat_name="项目组(9)", is_group=True, mentioned_me=True)
+    )
+    assert first.should_reply
+    assert not second.should_reply
+
+
+def test_group_and_private_same_name_are_separate():
+    """同名的群和联系人不该共享额度。"""
+    engine, _ = make_engine(DEDUP_CONFIG)
+    assert engine.decide(msg("在吗", chat_id="p", chat_name="小王")).should_reply
+    assert engine.decide(
+        msg("在吗", chat_id="g", chat_name="小王", is_group=True, mentioned_me=True)
+    ).should_reply
+
+
+def test_identity_ignores_platform_prefix_and_whitespace():
+    from core.models import chat_identity
+
+    a = IncomingMessage(chat_id="android:com.tencent.mm:小王", chat_name=" 小王 ", text="x")
+    b = IncomingMessage(chat_id="macos:小王", chat_name="小王", text="x")
+    assert chat_identity(a) == chat_identity(b)

@@ -2,7 +2,7 @@
 
 from .config import Config, ConfigError, build_config, load_config
 from .engine import HARD_BLOCK_KEYWORDS, ReplyEngine
-from .models import IncomingMessage, ReplyDecision
+from .models import IncomingMessage, ReplyDecision, chat_identity
 
 __all__ = [
     "Config",
@@ -12,5 +12,6 @@ __all__ = [
     "ReplyDecision",
     "ReplyEngine",
     "build_config",
+    "chat_identity",
     "load_config",
 ]

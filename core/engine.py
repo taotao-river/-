@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .config import Config
-from .models import IncomingMessage, ReplyDecision
+from .models import IncomingMessage, ReplyDecision, chat_identity
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +55,20 @@ class ReplyEngine:
         self._clock = clock
         self._state_path = Path(state_path) if state_path else None
 
-        # chat_id -> 上次回复时间戳
+        # 下面所有的键都是「会话身份」而不是各端上报的 chat_id：
+        # 微信多端同时在线时，安卓传 android:xxx、macOS 传 macos:xxx，
+        # 用 chat_id 会分裂成两套独立冷却，对方就收到两条重复回复。
+        # 归一化到会话名之后，各端共享同一份额度。
+        # chat 身份 -> 上次回复时间戳
         self._last_reply_at: dict[str, float] = {}
-        # chat_id -> 当天已回复的时间戳列表
+        # chat 身份 -> 当天已回复的时间戳列表
         self._chat_replies: dict[str, list[float]] = {}
         # 全局最近一小时的回复时间戳
         self._recent_replies: deque[float] = deque()
-        # chat_id -> 上次用过的回复文案下标，避免同一条重复刷屏
+        # chat 身份 -> 上次用过的回复文案下标，避免同一条重复刷屏
         self._rotation: dict[str, int] = {}
+        # chat 身份 -> (最后处理的消息内容, 时间戳)，用于跨端去重
+        self._last_seen: dict[str, tuple[str, float]] = {}
 
         self._load_state()
 
@@ -107,16 +113,31 @@ class ReplyEngine:
         if not self._within_active_hours(now):
             return ReplyDecision.skip("不在自动回复时段内")
 
+        identity = chat_identity(message)
+
+        # ---- 跨端去重 ----
+        # 同一条消息被另一端抢先处理过，这里直接跳过。
+        # 单独成一条判断而不是靠冷却兜底，是为了让日志能一眼看出
+        # 「不是被限流，是另一端已经回了」。
+        seen = self._last_seen.get(identity)
+        if seen and seen[0] == message.text:
+            elapsed = now - seen[1]
+            if elapsed < cfg.limits.cross_device_dedup_seconds:
+                return ReplyDecision.skip(
+                    f"{elapsed:.0f}s 前另一端已处理过同样内容，跨端去重"
+                )
+        self._last_seen[identity] = (message.text, now)
+
         # ---- 频率限制 ----
-        limit_reason = self._rate_limited(message.chat_id, now)
+        limit_reason = self._rate_limited(identity, now)
         if limit_reason:
             return ReplyDecision.skip(limit_reason)
 
         # ---- 命中规则 ----
         for rule in cfg.rules:
             if rule.matches(message.text):
-                text = self._pick_reply(message.chat_id, rule.name, rule.replies)
-                return self._commit(message, text, f"命中规则 {rule.name!r}", rule.name, now)
+                text = self._pick_reply(identity, rule.name, rule.replies)
+                return self._commit(message, identity, text, f"命中规则 {rule.name!r}", rule.name, now)
 
         # ---- 兜底 ----
         if cfg.fallback.kind == "none":
@@ -125,7 +146,7 @@ class ReplyEngine:
         if cfg.fallback.kind == "text":
             if not cfg.fallback.text:
                 return ReplyDecision.skip("fallback.type 为 text 但 fallback.text 为空")
-            return self._commit(message, cfg.fallback.text, "兜底文案", None, now)
+            return self._commit(message, identity, cfg.fallback.text, "兜底文案", None, now)
 
         # fallback.kind == "llm"
         if self._llm_reply is None:
@@ -137,7 +158,7 @@ class ReplyEngine:
             return ReplyDecision.skip(f"LLM 生成失败: {exc}")
         if not generated:
             return ReplyDecision.skip("LLM 未返回可用内容")
-        return self._commit(message, generated, "LLM 生成", None, now)
+        return self._commit(message, identity, generated, "LLM 生成", None, now)
 
     # ------------------------------------------------------------------ 内部
 
@@ -158,16 +179,16 @@ class ReplyEngine:
         # 跨零点，例如 22:00-02:00
         return current >= start or current <= end
 
-    def _rate_limited(self, chat_id: str, now: float) -> Optional[str]:
+    def _rate_limited(self, identity: str, now: float) -> Optional[str]:
         limits = self.config.limits
 
-        last = self._last_reply_at.get(chat_id)
+        last = self._last_reply_at.get(identity)
         if last is not None and now - last < limits.per_chat_cooldown_seconds:
             remaining = int(limits.per_chat_cooldown_seconds - (now - last))
             return f"该会话冷却中，还剩 {remaining}s"
 
-        today = [t for t in self._chat_replies.get(chat_id, []) if now - t < _DAY_SECONDS]
-        self._chat_replies[chat_id] = today
+        today = [t for t in self._chat_replies.get(identity, []) if now - t < _DAY_SECONDS]
+        self._chat_replies[identity] = today
         if len(today) >= limits.max_replies_per_chat_per_day:
             return f"该会话今日已达上限 {limits.max_replies_per_chat_per_day} 条"
 
@@ -178,9 +199,9 @@ class ReplyEngine:
 
         return None
 
-    def _pick_reply(self, chat_id: str, rule_name: str, replies: list[str]) -> str:
+    def _pick_reply(self, identity: str, rule_name: str, replies: list[str]) -> str:
         """同一会话内轮换文案，避免连续两次一模一样。"""
-        key = f"{chat_id}::{rule_name}"
+        key = f"{identity}::{rule_name}"
         index = self._rotation.get(key, -1) + 1
         self._rotation[key] = index
         return replies[index % len(replies)]
@@ -188,6 +209,7 @@ class ReplyEngine:
     def _commit(
         self,
         message: IncomingMessage,
+        identity: str,
         text: str,
         reason: str,
         rule_name: Optional[str],
@@ -197,8 +219,8 @@ class ReplyEngine:
         if self.config.signature:
             text = f"{text}{self.config.signature}"
 
-        self._last_reply_at[message.chat_id] = now
-        self._chat_replies.setdefault(message.chat_id, []).append(now)
+        self._last_reply_at[identity] = now
+        self._chat_replies.setdefault(identity, []).append(now)
         self._recent_replies.append(now)
         self._save_state()
 
@@ -228,6 +250,9 @@ class ReplyEngine:
         self._chat_replies = data.get("chat_replies", {})
         self._recent_replies = deque(data.get("recent_replies", []))
         self._rotation = data.get("rotation", {})
+        self._last_seen = {
+            k: tuple(v) for k, v in data.get("last_seen", {}).items()
+        }
 
     def _save_state(self) -> None:
         if not self._state_path:
@@ -237,6 +262,7 @@ class ReplyEngine:
             "chat_replies": self._chat_replies,
             "recent_replies": list(self._recent_replies),
             "rotation": self._rotation,
+            "last_seen": {k: list(v) for k, v in self._last_seen.items()},
         }
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)

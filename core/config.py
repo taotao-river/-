@@ -40,6 +40,9 @@ class Limits:
     global_max_replies_per_hour: int = 30
     min_delay_seconds: float = 3.0
     max_delay_seconds: float = 12.0
+    # 微信多端同时在线时，同一条消息会被安卓和 macOS 分别上报。
+    # 这个窗口内内容相同的消息只回一次，避免对方收到两条。
+    cross_device_dedup_seconds: int = 120
 
 
 @dataclass
