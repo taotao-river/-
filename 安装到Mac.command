@@ -144,7 +144,27 @@ fi
 echo
 echo "【5/5】生成桌面快捷方式"
 
-cat > "试运行（不真发消息）.command" <<EOF
+# 文件名带序号：不写清楚先点哪个，多数人会直接点最后那个
+cat > "1 检查微信.command" <<EOF
+#!/bin/bash
+cd "\$(dirname "\$0")"
+clear
+echo "=========================================================="
+echo "  检查程序能不能正常读到微信的界面"
+echo "  这一步只看不动：不读消息，也不发消息"
+echo "=========================================================="
+echo
+"$REPO_DIR/.venv/bin/python" macos/wechat_mac_bot.py --doctor
+echo
+echo "=========================================================="
+echo "  上面如果全是 [OK]，就可以双击「2 试运行」了。"
+echo "  如果出现 [X ]，把这个窗口整个截图发给帮你配置的人。"
+echo "=========================================================="
+echo
+read -n 1 -s -r -p "按任意键关闭..."
+EOF
+
+cat > "2 试运行（不真发消息）.command" <<EOF
 #!/bin/bash
 cd "\$(dirname "\$0")"
 export WXAUTO_SERVER=http://127.0.0.1:8848
@@ -152,28 +172,31 @@ export WXAUTO_TOKEN="$TOKEN"
 clear
 echo "=========================================================="
 echo "  试运行模式：只显示「本来会回什么」，不会真的发出去"
-echo "  确认没问题后，再用「开始自动回复」那个文件"
+echo
+echo "  注意：读消息需要点开会话，所以未读会被标成已读。"
+echo "  确认没问题后，再用「3 开始自动回复」那个文件"
 echo "  想停止：按 Control + C，或直接关掉这个窗口"
 echo "=========================================================="
 echo
 exec caffeinate -i "$REPO_DIR/.venv/bin/python" macos/wechat_mac_bot.py --dry-run
 EOF
 
-cat > "开始自动回复.command" <<EOF
+cat > "3 开始自动回复.command" <<EOF
 #!/bin/bash
 cd "\$(dirname "\$0")"
 export WXAUTO_SERVER=http://127.0.0.1:8848
 export WXAUTO_TOKEN="$TOKEN"
 clear
 echo "=========================================================="
-echo "  自动回复运行中。这个窗口关掉就停了。"
+echo "  自动回复运行中，会真的发消息了。"
+echo "  这个窗口关掉就停了。"
 echo "  想停止：按 Control + C，或直接关掉这个窗口"
 echo "=========================================================="
 echo
 exec caffeinate -i "$REPO_DIR/.venv/bin/python" macos/wechat_mac_bot.py
 EOF
 
-chmod +x "试运行（不真发消息）.command" "开始自动回复.command"
+chmod +x "1 检查微信.command" "2 试运行（不真发消息）.command" "3 开始自动回复.command"
 echo "      好了"
 
 # ---------------------------------------------------------- 授权引导
@@ -194,14 +217,17 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 echo
 echo
 echo "------------------------------------------------------------"
-echo "  授权完成后，回到这个文件夹，按顺序双击："
+echo "  授权完成后，回到这个文件夹，按数字顺序双击三个文件："
 echo
-echo "     1. 「试运行（不真发消息）.command」"
-echo "        看看它能不能正确读到你的微信消息。"
-echo "        如果显示的会话名和消息内容都对，说明成功了。"
+echo "     「1 检查微信.command」"
+echo "        看程序能不能读到微信界面。只看不动，很安全。"
+echo "        全是 [OK] 就继续；出现 [X ] 就截图求助。"
 echo
-echo "     2. 「开始自动回复.command」"
-echo "        确认第 1 步没问题后再用这个，它会真的发消息。"
+echo "     「2 试运行（不真发消息）.command」"
+echo "        看它会回什么，但不会真的发出去。"
+echo
+echo "     「3 开始自动回复.command」"
+echo "        确认前两步都没问题后再用这个，它会真的发消息。"
 echo
 echo "  另外建议：系统设置 → 电池 → 把「睡眠」设成「永不」，"
 echo "           否则合上盖子自动回复就停了。"
