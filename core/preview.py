@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -53,7 +54,13 @@ def _for_preview(config):
 
 
 def main(argv: list[str]) -> int:
-    path = Path(argv[1]) if len(argv) > 1 else Path("core/config.yaml")
+    # 顺序：命令行参数 > WXAUTO_CONFIG（服务端用的就是它）> 默认路径。
+    # 跟服务读同一个环境变量，免得预览的和真跑的不是同一份配置。
+    if len(argv) > 1:
+        path = Path(argv[1])
+    else:
+        path = Path(os.environ.get("WXAUTO_CONFIG") or "core/config.yaml")
+
     if not path.exists():
         fallback = Path("core/config.example.yaml")
         if fallback.exists():

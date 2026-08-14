@@ -86,6 +86,24 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(buildUi())
         loadIntoUi(Storage.loadConfig(this))
+
+        // 第一次打开先问几个问题，别一上来就把一屏设置摔在人脸上
+        if (!Storage.isWizardDone(this)) openWizard()
+    }
+
+    private fun openWizard() {
+        startActivityForResult(Intent(this, SetupWizardActivity::class.java), REQUEST_WIZARD)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        // 问答写完配置了，把界面上的内容换成新生成的那套。
+        // 只在这里重刷，不在 onResume 里——否则从系统设置页返回时
+        // 会把用户还没保存的修改冲掉。
+        if (requestCode == REQUEST_WIZARD && resultCode == RESULT_OK) {
+            loadIntoUi(Storage.loadConfig(this))
+            Toast.makeText(this, "已按你的回答生成好了", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onResume() {
@@ -136,6 +154,19 @@ class MainActivity : Activity() {
         })
 
         root.addView(hint("在打开的页面里找到「微信自动回复」并打开。不给这个权限，程序看不到微信消息。"))
+
+        root.addView(divider())
+
+        // ---- 重新答问答 ----
+        root.addView(section("回复内容"))
+        root.addView(Button(this).apply {
+            text = "回答几个问题，自动生成"
+            setOnClickListener { openWizard() }
+        })
+        root.addView(hint(
+            "十道选择题，一分钟答完，会把下面这些内容整套生成好——" +
+                "包括 AI 模式下的人设。答完还能在下面一句一句地改。"
+        ))
 
         root.addView(divider())
 
@@ -726,6 +757,7 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        private const val REQUEST_WIZARD = 1
         private const val TAG_KEYWORDS = "kw"
         private const val TAG_REPLY = "rp"
         private const val TAG_EX_THEM = "ex_them"

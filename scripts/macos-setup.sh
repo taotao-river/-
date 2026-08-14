@@ -35,11 +35,18 @@ echo "依赖装好了"
 
 echo
 echo "==> 生成配置"
-if [ ! -f core/config.yaml ]; then
-    cp core/config.example.yaml core/config.yaml
-    echo "已生成 core/config.yaml —— 等下记得改成你自己的规则"
+if [ -f core/config.yaml ]; then
+    echo "core/config.yaml 已存在，跳过（重新答一遍：$VENV/bin/python -m core.wizard）"
+elif [ -t 0 ]; then
+    # 有终端就走问答，把整套回复内容按你的答案生成出来。
+    # 直接抄示例配置的话，所有人的自动回复长得一模一样。
+    "$VENV/bin/python" -m core.wizard || {
+        echo "跳过问答，先放一份示例配置"
+        cp core/config.example.yaml core/config.yaml
+    }
 else
-    echo "core/config.yaml 已存在，跳过"
+    cp core/config.example.yaml core/config.yaml
+    echo "非交互环境，先放一份示例配置（之后跑 $VENV/bin/python -m core.wizard 生成你自己的）"
 fi
 
 TOKEN_FILE="$REPO_DIR/.wxauto_token"

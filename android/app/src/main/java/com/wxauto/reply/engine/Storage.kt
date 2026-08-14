@@ -15,6 +15,7 @@ object Storage {
 
     private const val KEY_CONFIG = "config_json"
     private const val KEY_STATE = "state_json"
+    private const val KEY_ANSWERS = "wizard_answers_json"
 
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -207,6 +208,28 @@ object Storage {
     private fun JSONArray?.toStringList(): List<String> {
         if (this == null) return emptyList()
         return (0 until length()).mapNotNull { optString(it).takeIf { s -> s.isNotBlank() } }
+    }
+
+    // ------------------------------------------------------------------ 开场问答
+
+    /** 答过一次就不再自动弹问答页。 */
+    fun isWizardDone(context: Context): Boolean = prefs(context).contains(KEY_ANSWERS)
+
+    /** 存答案本身（不只是生成结果），这样重答时能把上次的选择带出来。 */
+    fun saveWizardAnswers(context: Context, answers: Map<String, List<String>>) {
+        val json = JSONObject()
+        answers.forEach { (key, values) -> json.put(key, JSONArray(values)) }
+        prefs(context).edit().putString(KEY_ANSWERS, json.toString()).apply()
+    }
+
+    fun loadWizardAnswers(context: Context): Map<String, List<String>> {
+        val raw = prefs(context).getString(KEY_ANSWERS, null) ?: return emptyMap()
+        return runCatching {
+            val json = JSONObject(raw)
+            val out = HashMap<String, List<String>>()
+            json.keys().forEach { key -> out[key] = json.optJSONArray(key).toStringList() }
+            out as Map<String, List<String>>
+        }.getOrElse { emptyMap() }  // 存坏了就当没答过，大不了重答一遍
     }
 
     // ------------------------------------------------------------------ 状态

@@ -26,6 +26,12 @@
             </intent-filter>
         </activity>
 
+        <!-- 开场问答：装完第一次打开会自动进这里 -->
+        <activity
+            android:name=".SetupWizardActivity"
+            android:exported="false"
+            android:label="@string/app_name" />
+
         <!-- 主力：读通知 + RemoteInput 直接回复 -->
         <service
             android:name=".WeChatNotificationService"

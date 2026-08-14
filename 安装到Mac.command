@@ -70,12 +70,19 @@ echo "      好了"
 # ---------------------------------------------------------- 配置
 
 echo
-echo "【3/5】生成你的配置"
-if [ ! -f core/config.yaml ]; then
-    cp core/config.example.yaml core/config.yaml
-    echo "      已生成配置文件"
-else
+echo "【3/5】生成你的回复内容"
+if [ -f core/config.yaml ]; then
     echo "      配置文件已存在，保留你之前改过的内容"
+    echo "      想重新答一遍：$VENV/bin/python -m core.wizard"
+else
+    # 问几个问题把整套话生成出来。直接抄一份示例配置，
+    # 结果就是所有人的自动回复长得一模一样——那还不如不回。
+    if ! "$VENV/bin/python" -m core.wizard; then
+        echo
+        echo "      跳过了问答，先放一份示例配置"
+        cp core/config.example.yaml core/config.yaml
+        echo "      想以后再答：$VENV/bin/python -m core.wizard"
+    fi
 fi
 
 if [ ! -f .wxauto_token ]; then
