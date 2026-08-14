@@ -55,6 +55,29 @@ Termux 敲命令是不现实的。
 要加一家，往 `PRESETS` 里加一行就行，只要对方支持
 `POST {baseUrl}/chat/completions`。
 
+## 开场问答
+
+`engine/SetupWizard.kt` + `SetupWizardActivity.kt`，装完第一次打开自动进。
+对应 Python 版的 `core/wizard.py`（`python3 -m core.wizard`）。
+
+十道题，八道单选，选完直接跳下一题。答案按**确定的规则**拼装成人设、
+关键词规则和兜底话术——不是拿去喂模型润色的。理由有三个：
+
+- 人设本身就是提示词，不该是概率性的，否则每次生成的都不一样
+- 拼装是纯函数，可以单测；「让模型写提示词」测不了
+- 没有 key 也能用：关键词模式的人同样需要一套像样的文案
+
+地基是 `VOICE / APPOINTMENT / PROGRESS / STRANGER` 四张表，
+四种说话方式 × 四类常见情况共十六句话。加新情况就加一张表 +
+一道题，两端各加一次。
+
+**两端的问题 id 和顺序必须一致**，`SetupWizardTest.bothImplementationsAskTheSameQuestions`
+和 `test_both_implementations_ask_the_same_questions` 分别钉住了这一点。
+不一致的话，同一个人在电脑和手机上生成的人设不一样，语气就对不上了。
+
+`SetupWizard.applyTo` 只覆盖 persona / rules / fallbackText，
+开关、限流、黑名单、AI 设置一概不动——重答一遍不该冲掉用户其他设置。
+
 ## 判断顺序（这一段别改）
 
 ```
