@@ -245,7 +245,7 @@ def test_llm_failure_does_not_crash():
     engine._llm_reply = boom
     decision = engine.decide(msg("你好"))
     assert not decision.should_reply
-    assert "LLM 生成失败" in decision.reason
+    assert "生成失败" in decision.reason
 
 
 def test_llm_failure_does_not_consume_quota():
@@ -506,3 +506,107 @@ def test_preview_still_blocks_sensitive_words():
     decision = engine.decide(msg("帮我转账 500"))
     assert not decision.should_reply
     assert "敏感词" in decision.reason
+
+
+# --------------------------------------------------- AI 模式与人设
+
+
+AI_CONFIG = {
+    **BASE_CONFIG,
+    "reply_mode": "ai",
+    "persona": {
+        "identity": "我是做独立开发的，白天在写代码",
+        "tone": "偏短，口语，不用敬语",
+        "playbook": "问进度就给大概时间，不打包票",
+        "boundaries": ["不聊报价"],
+        "max_chars": 30,
+        "examples": [{"them": "在吗", "me": "在，怎么了"}],
+    },
+}
+
+
+def test_ai_mode_bypasses_rules():
+    """AI 模式下规则不参与，所有消息都交给模型。"""
+    engine, _ = make_engine(AI_CONFIG)
+    engine._llm_reply = lambda m, c: f"AI说：{m.text}"
+    d = engine.decide(msg("在吗"))          # 这句本来能命中「在吗」规则
+    assert d.text == "AI说：在吗"
+    assert d.rule_name is None
+    assert d.reason == "AI 生成"
+
+
+def test_ai_mode_still_blocks_sensitive_words():
+    """安全判断绝不能交给模型——必须在调用模型之前就拦下。"""
+    engine, _ = make_engine(AI_CONFIG)
+    called = []
+    engine._llm_reply = lambda m, c: called.append(m) or "不该被调用"
+    d = engine.decide(msg("帮我转账500"))
+    assert not d.should_reply
+    assert "敏感词" in d.reason
+    assert called == [], "敏感词消息不该送到模型那里去"
+
+
+def test_ai_mode_requires_persona():
+    with pytest.raises(ConfigError, match="persona"):
+        build_config({**BASE_CONFIG, "reply_mode": "ai"})
+
+
+def test_rules_only_mode_never_calls_model():
+    engine, _ = make_engine({**BASE_CONFIG, "reply_mode": "rules"})
+    engine._llm_reply = lambda m, c: "不该被调用"
+    assert engine.decide(msg("在吗")).text == "在的"
+    d = engine.decide(msg("完全没规则的话", chat_id="x", chat_name="乙"))
+    assert not d.should_reply
+    assert "纯规则模式" in d.reason
+
+
+def test_bad_reply_mode_rejected():
+    with pytest.raises(ConfigError, match="reply_mode"):
+        build_config({**BASE_CONFIG, "reply_mode": "随便"})
+
+
+# --------------------------------------------------- 提示词与上下文
+
+
+def test_system_prompt_contains_persona_and_rules():
+    from core.persona import build_persona, build_system_prompt
+
+    prompt = build_system_prompt(build_persona(AI_CONFIG["persona"]))
+    assert "独立开发" in prompt
+    assert "问进度就给大概时间" in prompt
+    assert "不聊报价" in prompt          # 自定义边界
+    assert "30 个字以内" in prompt        # 长度限制
+    assert "转账" in prompt               # 内置硬性边界
+    assert "在，怎么了" in prompt          # 示范语气
+    assert "不要自称 AI" in prompt
+
+
+def test_conversation_memory_keeps_context():
+    from core.persona import ConversationMemory
+
+    mem = ConversationMemory(max_turns=4, ttl_seconds=600)
+    mem.remember("小王", "them", "在吗", now=100)
+    mem.remember("小王", "me", "在", now=101)
+    mem.remember("小王", "them", "那明天呢", now=102)
+
+    turns = mem.recent("小王", now=103)
+    assert [t.text for t in turns] == ["在吗", "在", "那明天呢"]
+
+
+def test_conversation_memory_expires_old_turns():
+    from core.persona import ConversationMemory
+
+    mem = ConversationMemory(max_turns=8, ttl_seconds=60)
+    mem.remember("小王", "them", "很久以前的事", now=0)
+    mem.remember("小王", "them", "刚刚说的", now=100)
+    # 太老的上下文会误导——三天前那事早翻篇了
+    assert [t.text for t in mem.recent("小王", now=120)] == ["刚刚说的"]
+
+
+def test_conversation_memory_is_per_chat():
+    from core.persona import ConversationMemory
+
+    mem = ConversationMemory()
+    mem.remember("小王", "them", "甲的话", now=1)
+    mem.remember("小李", "them", "乙的话", now=1)
+    assert [t.text for t in mem.recent("小王", now=2)] == ["甲的话"]

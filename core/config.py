@@ -8,6 +8,8 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Optional
 
+from .persona import Persona, build_persona
+
 import yaml
 
 
@@ -73,6 +75,11 @@ class Fallback:
 @dataclass
 class Config:
     enabled: bool = True
+    reply_mode: str = "rules_then_ai"
+    """ai：全部交给模型按人设生成（规则忽略）
+    rules：只用关键词规则
+    rules_then_ai：规则优先，没命中才用模型"""
+    persona: Persona = field(default_factory=Persona)
     signature: str = ""
     active_hours: list[tuple[dtime, dtime]] = field(default_factory=list)
     scope: Scope = field(default_factory=Scope)
@@ -153,9 +160,22 @@ def build_config(data: dict[str, Any]) -> Config:
     if fallback_kind not in ("llm", "text", "none"):
         raise ConfigError(f"fallback.type 只能是 llm/text/none，收到 {fallback_kind!r}")
 
+    mode = data.get("reply_mode", "rules_then_ai")
+    if mode not in ("ai", "rules", "rules_then_ai"):
+        raise ConfigError(
+            f"reply_mode 只能是 ai/rules/rules_then_ai，收到 {mode!r}"
+        )
+
+    persona = build_persona(data.get("persona") or {})
+    if mode == "ai" and not persona.is_configured():
+        raise ConfigError(
+            "reply_mode 为 ai 时必须配置 persona.identity 或 persona.playbook，"
+            "否则生成出来的只会是客服腔"
+        )
+
     llm_raw = data.get("llm") or {}
     llm = LLMSettings(
-        enabled=fallback_kind == "llm",
+        enabled=mode in ("ai", "rules_then_ai") and fallback_kind == "llm" or mode == "ai",
         model=llm_raw.get("model", "claude-opus-5"),
         max_tokens=int(llm_raw.get("max_tokens", 300)),
         effort=llm_raw.get("effort", "low"),
@@ -165,6 +185,8 @@ def build_config(data: dict[str, Any]) -> Config:
 
     return Config(
         enabled=bool(data.get("enabled", True)),
+        reply_mode=mode,
+        persona=persona,
         signature=data.get("signature", ""),
         active_hours=[_parse_time_range(r) for r in (data.get("active_hours") or [])],
         scope=Scope(

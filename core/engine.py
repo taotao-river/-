@@ -134,6 +134,12 @@ class ReplyEngine:
         if limit_reason:
             return ReplyDecision.skip(limit_reason)
 
+        # ---- AI 模式：整段交给模型，规则不参与 ----
+        # 安全类判断已经在上面做完了，模型只负责「说什么」，
+        # 不负责「该不该说」——那部分不能交给概率性的东西。
+        if cfg.reply_mode == "ai":
+            return self._ai_reply(message, identity, now)
+
         # ---- 命中规则 ----
         for rule in cfg.rules:
             if rule.matches(message.text):
@@ -141,6 +147,9 @@ class ReplyEngine:
                 return self._commit(message, identity, text, f"命中规则 {rule.name!r}", rule.name, now)
 
         # ---- 兜底 ----
+        if cfg.reply_mode == "rules":
+            return ReplyDecision.skip("无规则命中（当前是纯规则模式）")
+
         if cfg.fallback.kind == "none":
             return ReplyDecision.skip("无规则命中，且未配置兜底回复")
 
@@ -150,16 +159,20 @@ class ReplyEngine:
             return self._commit(message, identity, cfg.fallback.text, "兜底文案", None, now)
 
         # fallback.kind == "llm"
+        return self._ai_reply(message, identity, now)
+
+    def _ai_reply(self, message, identity: str, now: float) -> ReplyDecision:
+        """交给模型生成。任何失败都退化成「不回复」，绝不乱发。"""
         if self._llm_reply is None:
-            return ReplyDecision.skip("fallback.type 为 llm 但未注入 LLM 客户端")
+            return ReplyDecision.skip("未接入模型客户端")
         try:
-            generated = self._llm_reply(message, cfg)
+            generated = self._llm_reply(message, self.config)
         except Exception as exc:  # 生成失败绝不能拖垮整条链路
-            logger.warning("LLM 生成失败，跳过本条: %s", exc)
-            return ReplyDecision.skip(f"LLM 生成失败: {exc}")
+            logger.warning("生成失败，跳过本条: %s", exc)
+            return ReplyDecision.skip(f"生成失败: {exc}")
         if not generated:
-            return ReplyDecision.skip("LLM 未返回可用内容")
-        return self._commit(message, identity, generated, "LLM 生成", None, now)
+            return ReplyDecision.skip("模型未返回可用内容")
+        return self._commit(message, identity, generated, "AI 生成", None, now)
 
     # ------------------------------------------------------------------ 内部
 
