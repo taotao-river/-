@@ -36,11 +36,23 @@ iOS 沙盒不允许任何第三方 App 读取或发送微信消息——没有�
 
 安卓上这件事简单得多（系统有官方 API，不用 root）：[`docs/android-setup.md`](docs/android-setup.md)
 
-**跑多个微信号 / 多个端**（账号隔离怎么配）：[`docs/multi-account.md`](docs/multi-account.md)
+**部署**（自己用 + 给朋友用，一个人一套服务）：[`docs/deployment.md`](docs/deployment.md)
+**多微信号 / 多端的额度隔离**：[`docs/multi-account.md`](docs/multi-account.md)
 
 ---
 
 ## 快速开始
+
+先对号入座，能省掉一大半工作：
+
+| 你的设备 | 要装什么 | 说明 |
+|---|---|---|
+| **iPhone + Mac**（同一个微信号） | 只装 Mac 那份 | 消息两边都到，Mac 回了就够了。**不用 Appium，不用越狱**，`ios/` 可以整个忽略 |
+| **只有 Android** | 安卓 App + Termux 跑服务 | 服务直接跑手机上，不依赖电脑：`bash scripts/termux-setup.sh` |
+| **只有 iPhone，没有 Mac** | `ios/appium/` 或 `ios/tweak/` | 这才是需要折腾的情况，见 [`docs/ios-feasibility.md`](docs/ios-feasibility.md) |
+
+给别人用的话：**每个人跑各自的服务**，别共用——否则对方的聊天内容会流经你的日志，
+回复也会用你的人设。详见 [`docs/deployment.md`](docs/deployment.md)。
 
 ### 1. 起规则服务
 
