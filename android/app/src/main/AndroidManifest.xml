@@ -2,9 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-      刻意不申请任何权限：规则引擎跑在本机，不联网、不上传任何消息。
-      需要的两个能力（读通知 / 无障碍）由系统单独授权，不走 uses-permission。
+      只申请联网这一个权限，而且只有「AI 生成」模式才会真的用到：
+      默认的关键词模式全程跑在本机，一个字节都不往外发。
+      读通知 / 无障碍这两个能力由系统单独授权，不走 uses-permission。
     -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:label="@string/app_name"

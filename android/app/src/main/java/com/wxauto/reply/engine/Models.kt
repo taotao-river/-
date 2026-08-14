@@ -61,6 +61,56 @@ data class Rule(
     }
 }
 
+enum class ReplyMode {
+    KEYWORD,   // 本机关键词匹配：免费、不联网、装完即用
+    AI;        // 交给模型按人设生成
+
+    companion object {
+        fun from(raw: String?): ReplyMode =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: KEYWORD
+    }
+}
+
+/** AI 怎么接。 */
+enum class AiSource {
+    OWN_KEY,   // 自己注册的 key，独立使用不依赖别人
+    RELAY;     // 用别人给的地址，人设和 key 都在对方那边
+
+    companion object {
+        fun from(raw: String?): AiSource =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: OWN_KEY
+    }
+}
+
+data class AiExample(val them: String, val me: String)
+
+/**
+ * 人设与应对攻略。
+ *
+ * 这是「像真人」和「像 QQ 自动回复」的分界线：这里描述的是判断依据，
+ * 不是问答对。你不用穷举别人可能说什么。
+ */
+data class PersonaConfig(
+    val identity: String = "",
+    val tone: String = "",
+    val playbook: String = "",
+    val boundaries: List<String> = emptyList(),
+    val maxChars: Int = 35,
+    val examples: List<AiExample> = emptyList(),
+) {
+    /** 没写人设就别用 AI——空人设生成出来只会是客服腔。 */
+    fun isConfigured(): Boolean = identity.isNotBlank() || playbook.isNotBlank()
+}
+
+data class AiConfig(
+    val source: AiSource = AiSource.OWN_KEY,
+    val baseUrl: String = "",
+    val apiKey: String = "",
+    val model: String = "",
+    val relayUrl: String = "",
+    val relayToken: String = "",
+)
+
 data class EngineConfig(
     /** 总开关。关掉之后引擎对任何消息都返回「不回复」。 */
     val enabled: Boolean = false,
@@ -84,6 +134,10 @@ data class EngineConfig(
     val maxPerHour: Int = 30,
     val minDelaySeconds: Int = 3,
     val maxDelaySeconds: Int = 12,
+
+    val replyMode: ReplyMode = ReplyMode.KEYWORD,
+    val persona: PersonaConfig = PersonaConfig(),
+    val ai: AiConfig = AiConfig(),
 
     val rules: List<Rule> = emptyList(),
 

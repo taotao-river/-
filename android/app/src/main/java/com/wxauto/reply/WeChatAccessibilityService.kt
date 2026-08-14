@@ -5,8 +5,8 @@ import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.wxauto.reply.engine.EngineHolder
 import com.wxauto.reply.engine.Message
-import com.wxauto.reply.engine.ReplyEngine
 import com.wxauto.reply.engine.Storage
 import java.util.concurrent.Executors
 
@@ -25,14 +25,14 @@ import java.util.concurrent.Executors
 class WeChatAccessibilityService : AccessibilityService() {
 
     private val executor = Executors.newSingleThreadExecutor()
-    private lateinit var engine: ReplyEngine
+    private lateinit var engines: EngineHolder
 
     /** 记住上次处理过的消息，避免同一条被界面刷新触发多次。 */
     private var lastHandled: String? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        engine = ReplyEngine(Storage.stateStore(this))
+        engines = EngineHolder(this)
         Log.i(TAG, "无障碍服务已连接")
     }
 
@@ -62,8 +62,9 @@ class WeChatAccessibilityService : AccessibilityService() {
 
     private fun handle(chatName: String, text: String) {
         val isGroup = Regex("""\(\d+\)$""").containsMatchIn(chatName)
-        val decision = engine.decide(
-            Storage.loadConfig(this),
+        val config = Storage.loadConfig(this)
+        val decision = engines.engineFor(config).decide(
+            config,
             Message(
                 chatId = chatName,
                 chatName = chatName,

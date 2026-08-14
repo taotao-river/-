@@ -8,8 +8,8 @@ import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.wxauto.reply.engine.EngineHolder
 import com.wxauto.reply.engine.Message
-import com.wxauto.reply.engine.ReplyEngine
 import com.wxauto.reply.engine.Storage
 import java.util.concurrent.Executors
 
@@ -33,11 +33,11 @@ import java.util.concurrent.Executors
 class WeChatNotificationService : NotificationListenerService() {
 
     private val executor = Executors.newSingleThreadExecutor()
-    private lateinit var engine: ReplyEngine
+    private lateinit var engines: EngineHolder
 
     override fun onCreate() {
         super.onCreate()
-        engine = ReplyEngine(Storage.stateStore(this))
+        engines = EngineHolder(this)
     }
 
     override fun onDestroy() {
@@ -94,7 +94,10 @@ class WeChatNotificationService : NotificationListenerService() {
         // 每次都重新读配置：用户在界面上改完或用快捷开关关掉，立刻生效
         val config = Storage.loadConfig(this)
 
-        val decision = engine.decide(
+        // AI 模式下这一步会走网络，可能要几秒。executor 是单线程的，
+        // 所以消息是排队处理的——回复本来就有频率限制，排队不影响结果，
+        // 而且能保证不会有两条回复同时往外发。
+        val decision = engines.engineFor(config).decide(
             config,
             Message(
                 chatId = chatName,

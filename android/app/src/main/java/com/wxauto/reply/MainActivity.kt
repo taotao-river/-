@@ -6,12 +6,14 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.provider.Settings
+import android.text.InputType
 import android.text.TextUtils
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
@@ -19,11 +21,18 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import com.wxauto.reply.engine.AiConfig
+import com.wxauto.reply.engine.AiExample
+import com.wxauto.reply.engine.AiSource
+import com.wxauto.reply.engine.Decision
 import com.wxauto.reply.engine.EngineConfig
 import com.wxauto.reply.engine.GroupPolicy
 import com.wxauto.reply.engine.InMemoryStateStore
 import com.wxauto.reply.engine.Message
+import com.wxauto.reply.engine.OpenAiCompatibleWriter
+import com.wxauto.reply.engine.PersonaConfig
 import com.wxauto.reply.engine.ReplyEngine
+import com.wxauto.reply.engine.ReplyMode
 import com.wxauto.reply.engine.Rule
 import com.wxauto.reply.engine.Storage
 
@@ -43,9 +52,35 @@ class MainActivity : Activity() {
     private lateinit var testResult: TextView
     private lateinit var testAsGroup: CheckBox
 
-    private var groupNeverId = View.generateViewId()
-    private var groupAtMeId = View.generateViewId()
-    private var groupAlwaysId = View.generateViewId()
+    // ---- 回复方式 ----
+    private lateinit var modeGroup: RadioGroup
+    private lateinit var keywordPanel: LinearLayout
+    private lateinit var aiPanel: LinearLayout
+
+    // ---- AI：接哪儿 ----
+    private lateinit var aiSourceGroup: RadioGroup
+    private lateinit var ownKeyPanel: LinearLayout
+    private lateinit var relayPanel: LinearLayout
+    private lateinit var baseUrlField: EditText
+    private lateinit var apiKeyField: EditText
+    private lateinit var modelField: EditText
+    private lateinit var relayUrlField: EditText
+    private lateinit var relayTokenField: EditText
+
+    // ---- AI：人设 ----
+    private lateinit var identityField: EditText
+    private lateinit var toneField: EditText
+    private lateinit var playbookField: EditText
+    private lateinit var maxCharsField: EditText
+    private lateinit var examplesContainer: LinearLayout
+
+    private val modeKeywordId = View.generateViewId()
+    private val modeAiId = View.generateViewId()
+    private val sourceOwnKeyId = View.generateViewId()
+    private val sourceRelayId = View.generateViewId()
+    private val groupNeverId = View.generateViewId()
+    private val groupAtMeId = View.generateViewId()
+    private val groupAlwaysId = View.generateViewId()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,6 +139,37 @@ class MainActivity : Activity() {
 
         root.addView(divider())
 
+        // ---- 回复方式 ----
+        root.addView(section("怎么回"))
+        modeGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+            addView(RadioButton(context).apply {
+                id = modeKeywordId
+                text = "按关键词回固定的话"
+            })
+            addView(RadioButton(context).apply {
+                id = modeAiId
+                text = "让 AI 按你的说话方式现写"
+            })
+            setOnCheckedChangeListener { _, _ -> refreshModePanels() }
+        }
+        root.addView(modeGroup)
+        root.addView(hint(
+            "关键词：不联网、不花钱，但只能回你事先写好的那几句。\n" +
+                "AI：每条消息现写，看得懂对方在说什么，语气像你本人。需要联网，" +
+                "并且要下面二选一填一个接口。"
+        ))
+
+        keywordPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        aiPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(keywordPanel)
+        root.addView(aiPanel)
+
+        buildKeywordPanel(keywordPanel)
+        buildAiPanel(aiPanel)
+
+        root.addView(divider())
+
         // ---- 群聊 ----
         root.addView(section("群聊消息"))
         groupPolicyGroup = RadioGroup(this).apply {
@@ -113,28 +179,6 @@ class MainActivity : Activity() {
             addView(RadioButton(context).apply { id = groupAlwaysId; text = "群里任何消息都回（容易刷屏）" })
         }
         root.addView(groupPolicyGroup)
-
-        root.addView(divider())
-
-        // ---- 规则 ----
-        root.addView(section("收到这些词，就回这句话"))
-        rulesContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(rulesContainer)
-
-        root.addView(Button(this).apply {
-            text = "＋ 再加一条"
-            setOnClickListener { rulesContainer.addView(ruleRow(Rule(name = "规则", replies = listOf(""))))}
-        })
-
-        root.addView(divider())
-
-        // ---- 兜底 ----
-        root.addView(section("其他消息统一回"))
-        fallbackField = EditText(this).apply {
-            hint = "留空表示不回"
-        }
-        root.addView(fallbackField)
-        root.addView(hint("上面的词都没匹配上时，回这一句。"))
 
         root.addView(divider())
 
@@ -148,7 +192,7 @@ class MainActivity : Activity() {
         root.addView(divider())
 
         // ---- 试一试 ----
-        // 不真发消息就能看到会回什么。开启之前先在这里把文案调顺，
+        // 不真发消息就能看到会回什么。开启之前先在这里把语气调顺，
         // 比让对方当小白鼠强。
         root.addView(section("试一试（不会真的发出去）"))
         testInput = EditText(this).apply {
@@ -170,7 +214,10 @@ class MainActivity : Activity() {
         }
         root.addView(testResult)
 
-        root.addView(hint("用的是你当前填的内容，不用先保存。试的时候不占用「每天最多回几条」的额度。"))
+        root.addView(hint(
+            "用的是你当前填的内容，不用先保存。试的时候不占用「每天最多回几条」的额度。\n" +
+                "AI 模式下这里会真的调一次接口，可以顺便验证 key 填对没有。"
+        ))
 
         root.addView(divider())
 
@@ -186,13 +233,34 @@ class MainActivity : Activity() {
 
         root.addView(hint(
             "安全说明：遇到含「转账、红包、验证码、借钱」等字样的消息，" +
-                "程序一律不自动回，交给你本人处理。这条改不了。\n\n" +
+                "程序一律不自动回，交给你本人处理。这条改不了，AI 模式下也一样——" +
+                "这类消息压根不会发给模型。\n\n" +
                 "每条回复末尾会带「（自动回复）」，让对方知道不是你本人在回。"
         ))
 
         return ScrollView(this).apply {
             addView(root, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
+    }
+
+    // ---------------------------------------------------------- 关键词模式面板
+
+    private fun buildKeywordPanel(panel: LinearLayout) {
+        panel.addView(section("收到这些词，就回这句话"))
+        rulesContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        panel.addView(rulesContainer)
+
+        panel.addView(Button(this).apply {
+            text = "＋ 再加一条"
+            setOnClickListener {
+                rulesContainer.addView(ruleRow(Rule(name = "规则", replies = listOf(""))))
+            }
+        })
+
+        panel.addView(section("其他消息统一回"))
+        fallbackField = EditText(this).apply { hint = "留空表示不回" }
+        panel.addView(fallbackField)
+        panel.addView(hint("上面的词都没匹配上时，回这一句。"))
     }
 
     /** 一条规则的编辑行：关键词 + 回复内容 + 删除按钮。 */
@@ -223,10 +291,193 @@ class MainActivity : Activity() {
         return row
     }
 
+    // ---------------------------------------------------------------- AI 面板
+
+    private fun buildAiPanel(panel: LinearLayout) {
+        panel.addView(section("AI 从哪儿来"))
+        aiSourceGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+            addView(RadioButton(context).apply {
+                id = sourceOwnKeyId
+                text = "我自己注册一个（推荐，谁也不依赖）"
+            })
+            addView(RadioButton(context).apply {
+                id = sourceRelayId
+                text = "用别人给我的地址"
+            })
+            setOnCheckedChangeListener { _, _ -> refreshAiSourcePanels() }
+        }
+        panel.addView(aiSourceGroup)
+
+        // ---- 自己的 key ----
+        ownKeyPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        panel.addView(ownKeyPanel)
+
+        ownKeyPanel.addView(hint(
+            "去下面任意一家的官网注册，在「API Key」页面点一下新建，" +
+                "把那串字符复制过来。国内直接能用，不用翻墙。多数家新注册都送额度，" +
+                "自动回复用量很小，基本花不到钱。"
+        ))
+
+        // 预设按钮：省掉「接口地址填什么」这个最容易卡住人的问题
+        val presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        OpenAiCompatibleWriter.PRESETS.forEach { preset ->
+            presetRow.addView(Button(this).apply {
+                text = preset.name
+                setOnClickListener {
+                    baseUrlField.setText(preset.baseUrl)
+                    modelField.setText(preset.model)
+                    Toast.makeText(
+                        this@MainActivity,
+                        "已填好${preset.name}的地址，下面把 key 粘进去就行",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            })
+        }
+        ownKeyPanel.addView(HorizontalScrollView(this).apply { addView(presetRow) })
+        ownKeyPanel.addView(hint("↑ 先点一下你注册的那家，地址和模型会自动填好"))
+
+        apiKeyField = EditText(this).apply {
+            hint = "把 API Key 粘贴到这里"
+            // 用可见密码类型：不走自动纠错和联想，但用户能看清自己粘对没有
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        }
+        ownKeyPanel.addView(apiKeyField)
+
+        baseUrlField = EditText(this).apply {
+            hint = "接口地址（点上面的按钮会自动填）"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        ownKeyPanel.addView(baseUrlField)
+
+        modelField = EditText(this).apply { hint = "模型名（点上面的按钮会自动填）" }
+        ownKeyPanel.addView(modelField)
+
+        // ---- 别人的地址 ----
+        relayPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        panel.addView(relayPanel)
+
+        relayPanel.addView(hint(
+            "让对方把他那边的地址和口令发给你，粘进来就行，不用注册任何账号。\n" +
+                "注意：这样一来，你收到的消息会经过对方的服务器，回复内容也由那边生成。" +
+                "只填你信得过的人给的地址。"
+        ))
+
+        relayUrlField = EditText(this).apply {
+            hint = "地址，形如 http://1.2.3.4:8848"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        relayPanel.addView(relayUrlField)
+
+        relayTokenField = EditText(this).apply {
+            hint = "口令"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        }
+        relayPanel.addView(relayTokenField)
+
+        // ---- 人设 ----
+        // 只有自己的 key 才需要填人设；用别人地址时人设在对方那边。
+        panel.addView(divider())
+        panel.addView(section("你是个什么样的人"))
+        panel.addView(hint(
+            "这一段决定回复像不像你本人。写的是「怎么判断」，不是「说什么」——" +
+                "你不用去猜别人会发什么，AI 会照着这里自己判断。"
+        ))
+
+        identityField = multiline("你是谁、平时在忙什么、为什么现在不方便回", 2)
+        panel.addView(labeled("我是谁", identityField))
+
+        toneField = multiline("越具体越像。别写「友好」「专业」这种空词", 2)
+        panel.addView(labeled("我说话的方式", toneField))
+
+        playbookField = multiline("一行写一种情况，例如：有人约时间，就说要确认日程", 6)
+        panel.addView(labeled("各种情况怎么应对（最重要）", playbookField))
+
+        maxCharsField = EditText(this).apply {
+            hint = "回复最多多少字"
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        panel.addView(labeled("回复长度上限", maxCharsField))
+        panel.addView(hint("真人回微信很少写长段，建议 30 字以内。"))
+
+        panel.addView(section("你平时是怎么说话的"))
+        panel.addView(hint(
+            "写几组你真的会说的话。这比任何形容词都管用——AI 会直接模仿这里的语气。" +
+                "务必用你自己的口气写，别写成客服话术。"
+        ))
+        examplesContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        panel.addView(examplesContainer)
+        panel.addView(Button(this).apply {
+            text = "＋ 再加一组"
+            setOnClickListener { examplesContainer.addView(exampleRow(AiExample("", ""))) }
+        })
+    }
+
+    private fun exampleRow(example: AiExample): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val them = EditText(this).apply {
+            hint = "对方说："
+            setText(example.them)
+            tag = TAG_EX_THEM
+        }
+        val me = EditText(this).apply {
+            hint = "我会回："
+            setText(example.me)
+            tag = TAG_EX_ME
+        }
+        val remove = Button(this).apply {
+            text = "删除这组"
+            setOnClickListener { examplesContainer.removeView(row) }
+        }
+        row.addView(them)
+        row.addView(me)
+        row.addView(remove)
+        return row
+    }
+
+    private fun refreshModePanels() {
+        val isAi = modeGroup.checkedRadioButtonId == modeAiId
+        keywordPanel.visibility = if (isAi) View.GONE else View.VISIBLE
+        aiPanel.visibility = if (isAi) View.VISIBLE else View.GONE
+        if (isAi) refreshAiSourcePanels()
+    }
+
+    private fun refreshAiSourcePanels() {
+        val ownKey = aiSourceGroup.checkedRadioButtonId != sourceRelayId
+        ownKeyPanel.visibility = if (ownKey) View.VISIBLE else View.GONE
+        relayPanel.visibility = if (ownKey) View.GONE else View.VISIBLE
+    }
+
     // ------------------------------------------------------------------ 读写
 
     private fun loadIntoUi(config: EngineConfig) {
         masterSwitch.isChecked = config.enabled
+
+        modeGroup.check(if (config.replyMode == ReplyMode.AI) modeAiId else modeKeywordId)
+        aiSourceGroup.check(
+            if (config.ai.source == AiSource.RELAY) sourceRelayId else sourceOwnKeyId
+        )
+        refreshModePanels()
+
+        baseUrlField.setText(config.ai.baseUrl)
+        apiKeyField.setText(config.ai.apiKey)
+        modelField.setText(config.ai.model)
+        relayUrlField.setText(config.ai.relayUrl)
+        relayTokenField.setText(config.ai.relayToken)
+
+        identityField.setText(config.persona.identity)
+        toneField.setText(config.persona.tone)
+        playbookField.setText(config.persona.playbook)
+        maxCharsField.setText(config.persona.maxChars.toString())
+
+        examplesContainer.removeAllViews()
+        config.persona.examples.ifEmpty { listOf(AiExample("", "")) }
+            .forEach { examplesContainer.addView(exampleRow(it)) }
+
         groupPolicyGroup.check(
             when (config.groupPolicy) {
                 GroupPolicy.NEVER -> groupNeverId
@@ -243,8 +494,32 @@ class MainActivity : Activity() {
     }
 
     private fun saveFromUi() {
-        Storage.saveConfig(this, buildConfigFromUi())
-        Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
+        val config = buildConfigFromUi()
+        Storage.saveConfig(this, config)
+
+        // 保存时就把「配了但填不全」说清楚，别等到真有人发消息才发现不回
+        val problem = configProblem(config)
+        if (problem == null) {
+            Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "已保存，但$problem", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** AI 模式下缺东西时的人话说明；没问题返回 null。 */
+    private fun configProblem(config: EngineConfig): String? {
+        if (config.replyMode != ReplyMode.AI) return null
+        return when {
+            config.ai.source == AiSource.RELAY && config.ai.relayUrl.isBlank() ->
+                "还没填对方给的地址，现在不会回复"
+            config.ai.source == AiSource.OWN_KEY && config.ai.apiKey.isBlank() ->
+                "还没填 API Key，现在不会回复"
+            config.ai.source == AiSource.OWN_KEY && config.ai.baseUrl.isBlank() ->
+                "还没选接口，点一下上面的 DeepSeek 之类的按钮"
+            config.ai.source == AiSource.OWN_KEY && !config.persona.isConfigured() ->
+                "人设是空的，回出来会像客服，建议填一下"
+            else -> null
+        }
     }
 
     /** 把界面上当前填的内容组装成配置。保存和「试一试」共用，避免两边不一致。 */
@@ -263,6 +538,15 @@ class MainActivity : Activity() {
             )
         }
 
+        val examples = ArrayList<AiExample>()
+        for (i in 0 until examplesContainer.childCount) {
+            val row = examplesContainer.getChildAt(i) as? ViewGroup ?: continue
+            val them = (row.findViewWithTag<EditText>(TAG_EX_THEM))?.text?.toString()?.trim().orEmpty()
+            val me = (row.findViewWithTag<EditText>(TAG_EX_ME))?.text?.toString()?.trim().orEmpty()
+            if (them.isBlank() || me.isBlank()) continue
+            examples += AiExample(them, me)
+        }
+
         val policy = when (groupPolicyGroup.checkedRadioButtonId) {
             groupAtMeId -> GroupPolicy.ONLY_AT_ME
             groupAlwaysId -> GroupPolicy.ALWAYS
@@ -275,6 +559,24 @@ class MainActivity : Activity() {
             rules = rules,
             fallbackText = fallbackField.text.toString().trim(),
             blockContacts = splitList(blockContactsField.text.toString()),
+            replyMode = if (modeGroup.checkedRadioButtonId == modeAiId)
+                ReplyMode.AI else ReplyMode.KEYWORD,
+            ai = AiConfig(
+                source = if (aiSourceGroup.checkedRadioButtonId == sourceRelayId)
+                    AiSource.RELAY else AiSource.OWN_KEY,
+                baseUrl = baseUrlField.text.toString().trim(),
+                apiKey = apiKeyField.text.toString().trim(),
+                model = modelField.text.toString().trim(),
+                relayUrl = relayUrlField.text.toString().trim(),
+                relayToken = relayTokenField.text.toString().trim(),
+            ),
+            persona = PersonaConfig(
+                identity = identityField.text.toString().trim(),
+                tone = toneField.text.toString().trim(),
+                playbook = playbookField.text.toString().trim(),
+                maxChars = maxCharsField.text.toString().trim().toIntOrNull()?.coerceIn(10, 200) ?: 30,
+                examples = examples,
+            ),
         )
     }
 
@@ -288,8 +590,7 @@ class MainActivity : Activity() {
     private fun runPreview() {
         val text = testInput.text.toString().trim()
         if (text.isEmpty()) {
-            testResult.text = "先在上面输入一句话"
-            testResult.setTextColor(Color.parseColor("#757575"))
+            showPreview("先在上面输入一句话", "#757575")
             return
         }
 
@@ -299,26 +600,51 @@ class MainActivity : Activity() {
             activeFromMinute = -1,
             activeToMinute = -1,
         )
+        configProblem(config)?.let {
+            showPreview("⚠️ $it", "#EF6C00")
+            return
+        }
+
         val isGroup = testAsGroup.isChecked
-        val decision = ReplyEngine(InMemoryStateStore()).decide(
-            config,
-            Message(
-                chatId = "preview",
-                chatName = "测试联系人",
-                text = text,
-                isGroup = isGroup,
-                mentionedMe = isGroup,
-            ),
+        val message = Message(
+            chatId = "preview",
+            chatName = "测试联系人",
+            text = text,
+            isGroup = isGroup,
+            mentionedMe = isGroup,
         )
 
-        if (decision.shouldReply) {
-            testResult.text = "✅ 会回复：\n${decision.text}\n\n（${decision.reason}，" +
-                "${decision.delayMillis / 1000} 秒后发出）"
-            testResult.setTextColor(Color.parseColor("#2E7D32"))
-        } else {
-            testResult.text = "⛔ 不会回复\n原因：${decision.reason}"
-            testResult.setTextColor(Color.parseColor("#D32F2F"))
+        // AI 模式要走网络，绝不能在主线程上做
+        if (config.replyMode == ReplyMode.AI) {
+            showPreview("正在问 AI…", "#757575")
+            Thread {
+                val decision = ReplyEngine(
+                    InMemoryStateStore(),
+                    aiWriter = Storage.aiWriter(config),
+                ).decide(config, message)
+                runOnUiThread { renderDecision(decision) }
+            }.start()
+            return
         }
+
+        renderDecision(ReplyEngine(InMemoryStateStore()).decide(config, message))
+    }
+
+    private fun renderDecision(decision: Decision) {
+        if (decision.shouldReply) {
+            showPreview(
+                "✅ 会回复：\n${decision.text}\n\n（${decision.reason}，" +
+                    "${decision.delayMillis / 1000} 秒后发出）",
+                "#2E7D32",
+            )
+        } else {
+            showPreview("⛔ 不会回复\n原因：${decision.reason}", "#D32F2F")
+        }
+    }
+
+    private fun showPreview(text: String, color: String) {
+        testResult.text = text
+        testResult.setTextColor(Color.parseColor(color))
     }
 
     /** 中英文逗号都当分隔符——用户不该被要求分清全角半角。 */
@@ -352,6 +678,25 @@ class MainActivity : Activity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private fun multiline(hintText: String, lines: Int) = EditText(this).apply {
+        hint = hintText
+        minLines = lines
+        gravity = android.view.Gravity.TOP or android.view.Gravity.START
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+    }
+
+    private fun labeled(label: String, field: View): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, dp(8), 0, 0)
+        addView(TextView(this@MainActivity).apply {
+            text = label
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setPadding(dp(12), 0, dp(12), dp(2))
+        })
+        addView(field)
+    }
+
     private fun title(text: String) = TextView(this).apply {
         this.text = text
         textSize = 24f
@@ -383,5 +728,7 @@ class MainActivity : Activity() {
     companion object {
         private const val TAG_KEYWORDS = "kw"
         private const val TAG_REPLY = "rp"
+        private const val TAG_EX_THEM = "ex_them"
+        private const val TAG_EX_ME = "ex_me"
     }
 }

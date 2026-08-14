@@ -20,6 +20,11 @@ class ReplyEngine(
     private val store: EngineStateStore,
     private val clock: () -> Long = System::currentTimeMillis,
     private val random: Random = Random.Default,
+    /**
+     * AI 生成器。为 null 时即使配了 AI 模式也会退回不回复——
+     * 宁可漏回，不可乱发。测试里注入假实现。
+     */
+    private val aiWriter: AiWriter? = null,
 ) {
 
     companion object {
@@ -84,6 +89,22 @@ class ReplyEngine(
 
         // ---- 频率限制 ----
         rateLimitReason(config, identity, now)?.let { return Decision.skip(it) }
+
+        // ---- AI 模式：整段交给模型 ----
+        // 注意这里的位置：安全判断（敏感词、黑名单、群聊策略）在上面
+        // 已经全部做完了。模型只负责「说什么」，不负责「该不该说」——
+        // 后者不能交给一个概率性的东西。
+        if (config.replyMode == ReplyMode.AI) {
+            if (aiWriter == null) return Decision.skip("没有配置 AI 接口")
+            val generated = try {
+                aiWriter.write(message.copy(text = text), config)
+            } catch (e: Exception) {
+                // 生成失败绝不能拖垮整条链路
+                return Decision.skip("AI 生成失败：${e.message}")
+            }
+            if (generated.isNullOrBlank()) return Decision.skip("AI 没返回可用内容")
+            return commit(config, identity, generated, "AI 生成", null, now)
+        }
 
         // ---- 命中规则 ----
         for (rule in config.rules) {

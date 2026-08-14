@@ -64,6 +64,32 @@ object Storage {
             ),
         ),
         fallbackText = "我现在不方便，看到会尽快回你",
+
+        // 默认走关键词：不联网、不花钱、装完即用。
+        // AI 要填 key，得用户自己决定。
+        replyMode = ReplyMode.KEYWORD,
+
+        // 人设先给一份通用的。空人设生成出来只会是客服腔，
+        // 而让一个不写代码的人从零开始写人设，多半就放弃了。
+        persona = PersonaConfig(
+            identity = "我平时挺忙的，微信经常隔一会儿才看，看到会回。",
+            tone = "句子短，一般一两句话。口语，不用敬语，不说「您」，不用感叹号，" +
+                "熟人之间那种随便的语气。",
+            playbook = listOf(
+                "有人问在不在、忙不忙：说在，但说明手上有事，等下回。",
+                "有人约时间、约见面：说要确认一下日程，等我本人回，不要当场答应任何时间点。",
+                "有人问什么时候能好、进度怎么样：给个模糊的时间感觉，不给具体日期，不打包票。",
+                "纯闲聊、发表情、分享链接：随便接一两句，别太热情也别冷场。",
+                "推销、拉群、发广告、求点赞投票：客气但明确地拒绝，一句话结束。",
+                "看不懂对方在说什么，或者事情比较重要：直接说等我本人回你，不要硬猜着接话。",
+            ).joinToString("\n"),
+            maxChars = 30,
+            examples = listOf(
+                AiExample("在吗", "在，怎么了"),
+                AiExample("明天下午有空不，一起吃个饭", "我看下日程，晚点回你"),
+                AiExample("哈哈哈哈太逗了", "确实"),
+            ),
+        ),
     )
 
     private fun serializeConfig(c: EngineConfig): JSONObject = JSONObject().apply {
@@ -82,6 +108,27 @@ object Storage {
         put("minDelaySeconds", c.minDelaySeconds)
         put("maxDelaySeconds", c.maxDelaySeconds)
         put("fallbackText", c.fallbackText)
+        put("replyMode", c.replyMode.name)
+        put("persona", JSONObject().apply {
+            put("identity", c.persona.identity)
+            put("tone", c.persona.tone)
+            put("playbook", c.persona.playbook)
+            put("boundaries", JSONArray(c.persona.boundaries))
+            put("maxChars", c.persona.maxChars)
+            put("examples", JSONArray().apply {
+                c.persona.examples.forEach {
+                    put(JSONObject().put("them", it.them).put("me", it.me))
+                }
+            })
+        })
+        put("ai", JSONObject().apply {
+            put("source", c.ai.source.name)
+            put("baseUrl", c.ai.baseUrl)
+            put("apiKey", c.ai.apiKey)
+            put("model", c.ai.model)
+            put("relayUrl", c.ai.relayUrl)
+            put("relayToken", c.ai.relayToken)
+        })
         put("rules", JSONArray().apply {
             c.rules.forEach { r ->
                 put(JSONObject().apply {
@@ -112,6 +159,35 @@ object Storage {
             minDelaySeconds = o.optInt("minDelaySeconds", fallback.minDelaySeconds),
             maxDelaySeconds = o.optInt("maxDelaySeconds", fallback.maxDelaySeconds),
             fallbackText = o.optString("fallbackText", fallback.fallbackText),
+            replyMode = ReplyMode.from(o.optString("replyMode")),
+            persona = o.optJSONObject("persona").let { pj ->
+                if (pj == null) PersonaConfig() else PersonaConfig(
+                    identity = pj.optString("identity"),
+                    tone = pj.optString("tone"),
+                    playbook = pj.optString("playbook"),
+                    boundaries = pj.optJSONArray("boundaries").toStringList(),
+                    maxChars = pj.optInt("maxChars", 35),
+                    examples = pj.optJSONArray("examples").let { arr ->
+                        if (arr == null) emptyList() else (0 until arr.length()).mapNotNull { i ->
+                            arr.optJSONObject(i)?.let { e ->
+                                val them = e.optString("them")
+                                val me = e.optString("me")
+                                if (them.isBlank() || me.isBlank()) null else AiExample(them, me)
+                            }
+                        }
+                    },
+                )
+            },
+            ai = o.optJSONObject("ai").let { aj ->
+                if (aj == null) AiConfig() else AiConfig(
+                    source = AiSource.from(aj.optString("source")),
+                    baseUrl = aj.optString("baseUrl"),
+                    apiKey = aj.optString("apiKey"),
+                    model = aj.optString("model"),
+                    relayUrl = aj.optString("relayUrl"),
+                    relayToken = aj.optString("relayToken"),
+                )
+            },
             rules = o.optJSONArray("rules").let { arr ->
                 if (arr == null) fallback.rules
                 else (0 until arr.length()).mapNotNull { i ->
@@ -136,6 +212,37 @@ object Storage {
     // ------------------------------------------------------------------ 状态
 
     fun stateStore(context: Context): EngineStateStore = PrefsStateStore(prefs(context))
+
+    /**
+     * 按配置造出 AI 生成器。配置不全时返回 null，
+     * 引擎会因此退化成「不回复」而不是乱发。
+     */
+    fun aiWriter(config: EngineConfig): AiWriter? = when {
+        config.replyMode != ReplyMode.AI -> null
+        config.ai.source == AiSource.RELAY ->
+            config.ai.relayUrl.takeIf { it.isNotBlank() }
+                ?.let { RelayWriter(it, config.ai.relayToken) }
+        else ->
+            if (config.ai.baseUrl.isNotBlank() && config.ai.apiKey.isNotBlank())
+                OpenAiCompatibleWriter(config.ai.baseUrl, config.ai.apiKey, config.ai.model)
+            else null
+    }
+
+    /**
+     * 标识「当前该用哪个 AI 生成器」。只要这个值没变就可以复用同一个实例，
+     * 从而保住对话记忆（见 EngineHolder）。
+     *
+     * key 和口令只取哈希：这个字符串会在内存里留存，不该出现明文凭据。
+     */
+    fun aiWriterKey(config: EngineConfig): String = listOf(
+        config.replyMode.name,
+        config.ai.source.name,
+        config.ai.baseUrl,
+        config.ai.model,
+        config.ai.apiKey.hashCode().toString(),
+        config.ai.relayUrl,
+        config.ai.relayToken.hashCode().toString(),
+    ).joinToString("|")
 
     private class PrefsStateStore(private val prefs: SharedPreferences) : EngineStateStore {
         private val last = HashMap<String, Long>()
