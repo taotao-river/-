@@ -49,6 +49,10 @@
 static NSString *const kEngineURL = @"http://127.0.0.1:8848/reply";
 static NSString *const kEngineToken = @"CHANGE_ME";
 
+// 这一端在驱动哪个微信号。跑多个号时必须各填各的，限流和去重按它隔离；
+// 留空则回退成 platform（按平台隔离）。
+static NSString *const kAccount = @"";
+
 // 全局开关，出问题时能快速停掉
 static BOOL gEnabled = YES;
 
@@ -99,6 +103,7 @@ static void AskEngine(NSString *chatId,
         @"is_group": @(isGroup),
         @"mentioned_me": @(mentionedMe),
         @"platform": @"ios",
+        @"account": kAccount,
     };
 
     NSError *encodeError = nil;

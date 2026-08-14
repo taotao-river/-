@@ -76,6 +76,9 @@ class MessageIn(BaseModel):
     is_group: bool = False
     mentioned_me: bool = False
     platform: str = "unknown"
+    account: str = ""
+    """驱动的是哪个微信号。同号多端填相同值，不同号填不同值；
+    留空则回退成 platform（按平台隔离）。"""
 
 
 class DecisionOut(BaseModel):

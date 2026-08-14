@@ -38,6 +38,7 @@ class WeChatAccessibilityService : AccessibilityService() {
                 WeChatNotificationService.DEFAULT_URL
             )!!,
             token = prefs.getString(WeChatNotificationService.KEY_TOKEN, "")!!,
+            account = prefs.getString(WeChatNotificationService.KEY_ACCOUNT, "")!!,
         )
         Log.i(TAG, "无障碍服务已连接")
     }

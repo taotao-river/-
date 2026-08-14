@@ -66,9 +66,12 @@ class ChatPreview:
 class EngineClient:
     """跟本地规则服务通信。网络挂了就当作「不回」，绝不瞎发。"""
 
-    def __init__(self, base_url: str, token: str, timeout: float = 10.0) -> None:
+    def __init__(
+        self, base_url: str, token: str, account: str = "", timeout: float = 10.0
+    ) -> None:
         self._url = base_url.rstrip("/") + "/reply"
         self._headers = {"Authorization": f"Bearer {token}"}
+        self._account = account
         self._timeout = timeout
 
     def decide(self, chat_name: str, text: str, is_group: bool, mentioned_me: bool) -> Optional[dict]:
@@ -80,6 +83,7 @@ class EngineClient:
             "is_group": is_group,
             "mentioned_me": mentioned_me,
             "platform": "ios",
+            "account": self._account,
         }
         try:
             resp = requests.post(
@@ -315,7 +319,7 @@ def main() -> int:
         logger.error("请设置 WXAUTO_TOKEN，与规则服务保持一致")
         return 1
 
-    engine = EngineClient(server, token)
+    engine = EngineClient(server, token, os.environ.get("WXAUTO_ACCOUNT", ""))
 
     try:
         driver = build_driver(udid, args.appium)

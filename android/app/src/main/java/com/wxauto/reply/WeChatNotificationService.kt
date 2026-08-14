@@ -35,6 +35,7 @@ class WeChatNotificationService : NotificationListenerService() {
         engine = ReplyEngineClient(
             baseUrl = prefs.getString(KEY_URL, DEFAULT_URL)!!,
             token = prefs.getString(KEY_TOKEN, "")!!,
+            account = prefs.getString(KEY_ACCOUNT, "")!!,
         )
     }
 
@@ -148,6 +149,7 @@ class WeChatNotificationService : NotificationListenerService() {
         const val PREFS = "wxauto"
         const val KEY_URL = "engine_url"
         const val KEY_TOKEN = "engine_token"
+        const val KEY_ACCOUNT = "engine_account"
         const val DEFAULT_URL = "http://10.0.2.2:8848"
     }
 }

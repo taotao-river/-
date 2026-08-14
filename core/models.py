@@ -40,12 +40,27 @@ class IncomingMessage:
     platform: str = "unknown"
     """android / ios / macos，仅用于日志。"""
 
+    account: str = ""
+    """这一端在驱动哪个微信号。
+
+    平台和账号是两件不同的事，必须分开：
+      - 同一个号在安卓和 macOS 上同时登录 → 两端填**相同**的 account，
+        共享冷却额度并互相去重，避免对方收到两条重复回复。
+      - 两个不同的微信号分别跑在两端 → 两端填**不同**的 account
+        （或都留空，默认按平台隔离），各自独立计数。
+
+    留空时回退成 platform，这个默认值偏向「隔离」——误判方向是
+    多回一条而不是漏回，且只在同号多端时才需要显式配置。
+    """
+
     timestamp: float = field(default_factory=time.time)
 
     def __post_init__(self) -> None:
         self.text = (self.text or "").strip()
         if not self.sender_name:
             self.sender_name = self.chat_name
+        if not self.account:
+            self.account = self.platform
 
 
 @dataclass
@@ -70,18 +85,25 @@ class ReplyDecision:
 def chat_identity(message: IncomingMessage) -> str:
     """把一条消息归一化成「会话身份」，作为限流和去重的键。
 
-    为什么不直接用 chat_id：微信支持多端同时在线，同一条消息安卓和
-    macOS 会各上报一次，而两端的 chat_id 前缀天然不同
-    （android:com.tencent.mm:小王 vs macos:小王）。用 chat_id 做键会
-    分裂成两套独立冷却，对方就会收到两条一模一样的自动回复。
+    键由三段构成：账号 + 会话类型 + 归一化会话名。
 
-    改用会话名归一化：
+    为什么不直接用各端上报的 chat_id：同一个微信号在安卓和 macOS 上
+    同时登录时，两端的 chat_id 前缀天然不同
+    （android:com.tencent.mm:小王 vs macos:小王），用它做键会分裂成
+    两套独立冷却，对方就收到两条一模一样的自动回复。
+
+    为什么必须带上 account：账号才是隔离边界，平台不是。两个不同的
+    微信号各跑一端时，两边的「小王」是两个不同的人，绝不能共享额度，
+    否则 B 号该回的消息会被 A 号刚回过的同名会话误杀。
+
+    会话名的归一化：
       - 去掉群名后缀的成员数，人数变化不该被当成新会话
       - 去掉首尾空白、统一大小写，抹平各端取名的细微差异
       - 群聊和私聊分开命名空间，避免同名的群和人撞到一起
 
-    代价是两个昵称完全相同的联系人会共享额度。这个方向的误判是
-    「少回一条」，比重复回复安全，可以接受。
+    残留代价：**同一个账号内**两个昵称完全相同的联系人会共享额度。
+    这个方向的误判是「少回一条」，比重复回复安全，可以接受。
     """
     name = _MEMBER_COUNT.sub("", message.chat_name).strip().casefold()
-    return f"{'group' if message.is_group else 'private'}:{name}"
+    scope = "group" if message.is_group else "private"
+    return f"{message.account}|{scope}:{name}"

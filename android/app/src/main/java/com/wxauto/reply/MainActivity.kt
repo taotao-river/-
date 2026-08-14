@@ -34,12 +34,19 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
 
+        val accountField = EditText(this).apply {
+            hint = "微信号标识（可留空），如「工作号」"
+            setText(prefs.getString(WeChatNotificationService.KEY_ACCOUNT, ""))
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+
         val save = Button(this).apply {
             text = "保存"
             setOnClickListener {
                 prefs.edit()
                     .putString(WeChatNotificationService.KEY_URL, urlField.text.toString().trim())
                     .putString(WeChatNotificationService.KEY_TOKEN, tokenField.text.toString().trim())
+                    .putString(WeChatNotificationService.KEY_ACCOUNT, accountField.text.toString().trim())
                     .apply()
                 // 通知监听服务在 onCreate 读配置，改完要重开一次才生效
                 Toast.makeText(
@@ -70,6 +77,9 @@ class MainActivity : Activity() {
                 • 主力方案靠微信通知里的「回复」按钮，不需要无障碍权限。
                 • 只有当通知没有回复入口、或会话开了免打扰时，才需要开②。
                 • 所有规则、冷却、敏感词都在服务端配置，本 App 不存消息内容。
+                • 微信号标识：跑多个微信号时用来区分额度。两个不同的号
+                  各跑一端就填不同的值（或都留空）；同一个号在手机和电脑
+                  同时登录，则两端填相同的值，避免对方收到两条重复回复。
             """.trimIndent()
             setPadding(0, 32, 0, 0)
         }
@@ -79,6 +89,7 @@ class MainActivity : Activity() {
             setPadding(48, 64, 48, 48)
             addView(urlField)
             addView(tokenField)
+            addView(accountField)
             addView(save)
             addView(notifPerm)
             addView(a11yPerm)

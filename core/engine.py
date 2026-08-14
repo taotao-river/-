@@ -63,8 +63,9 @@ class ReplyEngine:
         self._last_reply_at: dict[str, float] = {}
         # chat 身份 -> 当天已回复的时间戳列表
         self._chat_replies: dict[str, list[float]] = {}
-        # 全局最近一小时的回复时间戳
-        self._recent_replies: deque[float] = deque()
+        # 账号 -> 最近一小时的回复时间戳。按账号隔离而不是全局共用：
+        # 一个号的规则写错刷爆保险丝，不该把另一个号也一起饿死。
+        self._recent_replies: dict[str, deque[float]] = {}
         # chat 身份 -> 上次用过的回复文案下标，避免同一条重复刷屏
         self._rotation: dict[str, int] = {}
         # chat 身份 -> (最后处理的消息内容, 时间戳)，用于跨端去重
@@ -129,7 +130,7 @@ class ReplyEngine:
         self._last_seen[identity] = (message.text, now)
 
         # ---- 频率限制 ----
-        limit_reason = self._rate_limited(identity, now)
+        limit_reason = self._rate_limited(identity, message.account, now)
         if limit_reason:
             return ReplyDecision.skip(limit_reason)
 
@@ -179,7 +180,7 @@ class ReplyEngine:
         # 跨零点，例如 22:00-02:00
         return current >= start or current <= end
 
-    def _rate_limited(self, identity: str, now: float) -> Optional[str]:
+    def _rate_limited(self, identity: str, account: str, now: float) -> Optional[str]:
         limits = self.config.limits
 
         last = self._last_reply_at.get(identity)
@@ -192,10 +193,11 @@ class ReplyEngine:
         if len(today) >= limits.max_replies_per_chat_per_day:
             return f"该会话今日已达上限 {limits.max_replies_per_chat_per_day} 条"
 
-        while self._recent_replies and now - self._recent_replies[0] >= _HOUR_SECONDS:
-            self._recent_replies.popleft()
-        if len(self._recent_replies) >= limits.global_max_replies_per_hour:
-            return f"全局一小时上限 {limits.global_max_replies_per_hour} 条已满"
+        recent = self._recent_replies.setdefault(account, deque())
+        while recent and now - recent[0] >= _HOUR_SECONDS:
+            recent.popleft()
+        if len(recent) >= limits.global_max_replies_per_hour:
+            return f"账号 {account!r} 一小时上限 {limits.global_max_replies_per_hour} 条已满"
 
         return None
 
@@ -221,13 +223,16 @@ class ReplyEngine:
 
         self._last_reply_at[identity] = now
         self._chat_replies.setdefault(identity, []).append(now)
-        self._recent_replies.append(now)
+        self._recent_replies.setdefault(message.account, deque()).append(now)
         self._save_state()
 
         limits = self.config.limits
         delay = random.uniform(limits.min_delay_seconds, limits.max_delay_seconds)
 
-        logger.info("[%s] %s -> %s (%s)", message.platform, message.chat_name, text, reason)
+        logger.info(
+            "[%s/%s] %s -> %s (%s)",
+            message.account, message.platform, message.chat_name, text, reason,
+        )
         return ReplyDecision(
             should_reply=True,
             reason=reason,
@@ -248,7 +253,9 @@ class ReplyEngine:
             return
         self._last_reply_at = data.get("last_reply_at", {})
         self._chat_replies = data.get("chat_replies", {})
-        self._recent_replies = deque(data.get("recent_replies", []))
+        self._recent_replies = {
+            k: deque(v) for k, v in data.get("recent_replies", {}).items()
+        }
         self._rotation = data.get("rotation", {})
         self._last_seen = {
             k: tuple(v) for k, v in data.get("last_seen", {}).items()
@@ -260,7 +267,7 @@ class ReplyEngine:
         payload = {
             "last_reply_at": self._last_reply_at,
             "chat_replies": self._chat_replies,
-            "recent_replies": list(self._recent_replies),
+            "recent_replies": {k: list(v) for k, v in self._recent_replies.items()},
             "rotation": self._rotation,
             "last_seen": {k: list(v) for k, v in self._last_seen.items()},
         }

@@ -16,6 +16,12 @@ import java.util.concurrent.TimeUnit
 class ReplyEngineClient(
     private val baseUrl: String,
     private val token: String,
+    /**
+     * 这一端驱动的是哪个微信号。限流和去重按账号隔离，不是按平台：
+     * 两个不同的号各跑一端就填不同的值（或都留空），同一个号多端登录
+     * 则两端填相同的值以避免重复回复。留空时服务端回退成 platform。
+     */
+    private val account: String = "",
 ) {
 
     data class Decision(
@@ -45,6 +51,7 @@ class ReplyEngineClient(
             put("is_group", isGroup)
             put("mentioned_me", mentionedMe)
             put("platform", "android")
+            put("account", account)
         }
 
         var conn: HttpURLConnection? = null

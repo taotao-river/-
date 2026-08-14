@@ -179,7 +179,7 @@ def test_global_hourly_cap():
     assert engine.decide(msg("在吗", chat_id="b", chat_name="B")).should_reply
     decision = engine.decide(msg("在吗", chat_id="c", chat_name="C"))
     assert not decision.should_reply
-    assert "全局一小时上限" in decision.reason
+    assert "一小时上限" in decision.reason
 
 
 def test_cooldown_is_per_chat():
@@ -329,9 +329,11 @@ def test_android_and_macos_do_not_both_reply():
     engine, _ = make_engine(DEDUP_CONFIG)
 
     from_android = engine.decide(
-        msg("在吗", chat_id="android:com.tencent.mm:小王", platform="android")
+        msg("在吗", chat_id="android:com.tencent.mm:小王", platform="android", account="主号")
     )
-    from_macos = engine.decide(msg("在吗", chat_id="macos:小王", platform="macos"))
+    from_macos = engine.decide(
+        msg("在吗", chat_id="macos:小王", platform="macos", account="主号")
+    )
 
     assert from_android.should_reply
     assert not from_macos.should_reply
@@ -341,19 +343,19 @@ def test_android_and_macos_do_not_both_reply():
 def test_cooldown_shared_across_platforms():
     """即使内容不同，两端也该共享同一份冷却额度。"""
     engine, clock = make_engine(DEDUP_CONFIG)
-    assert engine.decide(msg("在吗", chat_id="android:xx:小王")).should_reply
+    assert engine.decide(msg("在吗", chat_id="android:xx:小王", account="主号")).should_reply
     clock.advance(200)  # 超过去重窗口，但没过冷却
-    decision = engine.decide(msg("忙吗", chat_id="macos:小王"))
+    decision = engine.decide(msg("忙吗", chat_id="macos:小王", account="主号"))
     assert not decision.should_reply
     assert "冷却中" in decision.reason
 
 
 def test_dedup_window_expires():
     engine, clock = make_engine(DEDUP_CONFIG)
-    engine.decide(msg("在吗", chat_id="android:xx:小王"))
+    engine.decide(msg("在吗", chat_id="android:xx:小王", account="主号"))
     clock.advance(121)   # 去重窗口过了
     clock.advance(600)   # 冷却也过了
-    assert engine.decide(msg("在吗", chat_id="macos:小王")).should_reply
+    assert engine.decide(msg("在吗", chat_id="macos:小王", account="主号")).should_reply
 
 
 def test_different_text_not_deduped():
@@ -361,8 +363,8 @@ def test_different_text_not_deduped():
     engine, clock = make_engine(
         {**DEDUP_CONFIG, "limits": {**DEDUP_CONFIG["limits"], "per_chat_cooldown_seconds": 0}}
     )
-    assert engine.decide(msg("在吗", chat_id="android:xx:小王")).should_reply
-    assert engine.decide(msg("在不在", chat_id="macos:小王")).should_reply
+    assert engine.decide(msg("在吗", chat_id="android:xx:小王", account="主号")).should_reply
+    assert engine.decide(msg("在不在", chat_id="macos:小王", account="主号")).should_reply
 
 
 def test_group_member_count_not_part_of_identity():
@@ -390,6 +392,91 @@ def test_group_and_private_same_name_are_separate():
 def test_identity_ignores_platform_prefix_and_whitespace():
     from core.models import chat_identity
 
-    a = IncomingMessage(chat_id="android:com.tencent.mm:小王", chat_name=" 小王 ", text="x")
-    b = IncomingMessage(chat_id="macos:小王", chat_name="小王", text="x")
+    a = IncomingMessage(chat_id="android:com.tencent.mm:小王", chat_name=" 小王 ", text="x", account="主号")
+    b = IncomingMessage(chat_id="macos:小王", chat_name="小王", text="x", account="主号")
     assert chat_identity(a) == chat_identity(b)
+
+
+# --------------------------------------------------- 多账号隔离（两个不同的微信号）
+
+
+def test_two_accounts_same_contact_name_are_independent():
+    """两个微信号各跑一端，即使联系人重名也必须各回各的。
+
+    这是和「同号多端」相反的场景：账号才是隔离边界，平台不是。
+    如果把平台当账号，B 号的「小王」会被 A 号刚回过的「小王」误杀。
+    """
+    engine, _ = make_engine(DEDUP_CONFIG)
+
+    work = engine.decide(msg("在吗", chat_id="android:小王", platform="android", account="工作号"))
+    personal = engine.decide(msg("在吗", chat_id="macos:小王", platform="macos", account="私人号"))
+
+    assert work.should_reply
+    assert personal.should_reply, "不同账号的同名联系人被误当成同一个会话"
+
+
+def test_accounts_default_to_platform_isolation():
+    """不填 account 时按平台隔离——对「两个号各跑一端」是安全的默认值。"""
+    engine, _ = make_engine(DEDUP_CONFIG)
+    assert engine.decide(msg("在吗", platform="android")).should_reply
+    assert engine.decide(msg("在吗", platform="macos")).should_reply
+
+
+def test_cooldown_isolated_between_accounts():
+    engine, _ = make_engine(DEDUP_CONFIG)
+    assert engine.decide(msg("在吗", account="工作号")).should_reply
+    assert not engine.decide(msg("在吗", account="工作号")).should_reply  # 同号冷却
+    assert engine.decide(msg("在吗", account="私人号")).should_reply      # 另一个号不受影响
+
+
+def test_daily_cap_isolated_between_accounts():
+    engine, clock = make_engine(DEDUP_CONFIG)
+    for _ in range(3):
+        engine.decide(msg("在吗", account="工作号"))
+        clock.advance(601)
+    assert not engine.decide(msg("在吗", account="工作号")).should_reply
+    assert engine.decide(msg("在吗", account="私人号")).should_reply
+
+
+def test_hourly_fuse_isolated_between_accounts():
+    """一个号刷爆保险丝，不该把另一个号一起饿死。"""
+    engine, clock = make_engine(
+        {
+            **DEDUP_CONFIG,
+            "limits": {
+                **DEDUP_CONFIG["limits"],
+                "per_chat_cooldown_seconds": 0,
+                "cross_device_dedup_seconds": 0,
+                "global_max_replies_per_hour": 2,
+            },
+        }
+    )
+    for i in range(2):
+        assert engine.decide(msg("在吗", chat_id=f"a{i}", chat_name=f"甲{i}", account="工作号")).should_reply
+        clock.advance(1)
+
+    blocked = engine.decide(msg("在吗", chat_id="a9", chat_name="甲9", account="工作号"))
+    assert not blocked.should_reply
+    assert "工作号" in blocked.reason
+
+    assert engine.decide(msg("在吗", chat_id="b1", chat_name="乙", account="私人号")).should_reply
+
+
+def test_account_falls_back_to_platform():
+    m = IncomingMessage(chat_id="x", chat_name="小王", text="hi", platform="android")
+    assert m.account == "android"
+
+
+def test_explicit_account_wins_over_platform():
+    m = IncomingMessage(
+        chat_id="x", chat_name="小王", text="hi", platform="android", account="工作号"
+    )
+    assert m.account == "工作号"
+
+
+def test_identity_separates_accounts():
+    from core.models import chat_identity
+
+    a = IncomingMessage(chat_id="x", chat_name="小王", text="hi", account="工作号")
+    b = IncomingMessage(chat_id="y", chat_name="小王", text="hi", account="私人号")
+    assert chat_identity(a) != chat_identity(b)

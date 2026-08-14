@@ -13,8 +13,13 @@ Apple 生态里最省事的方案。
 用法：
     export WXAUTO_SERVER=http://127.0.0.1:8848
     export WXAUTO_TOKEN=<和服务端一致>
+    export WXAUTO_ACCOUNT=私人号   # 跑多个微信号时用来区分，见下
     python macos/wechat_mac_bot.py --dry-run
     python macos/wechat_mac_bot.py
+
+关于 WXAUTO_ACCOUNT：限流和去重是按「账号」隔离的，不是按平台。
+  - 两个不同的微信号分别跑在 Mac 和安卓上 → 填不同的值（或都留空）
+  - 同一个微信号在 Mac 和安卓同时登录 → 两端填相同的值，避免重复回复
 """
 
 from __future__ import annotations
@@ -131,9 +136,10 @@ def run_applescript(script: str, *args: str) -> str:
 
 
 class EngineClient:
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(self, base_url: str, token: str, account: str = "") -> None:
         self._url = base_url.rstrip("/") + "/reply"
         self._headers = {"Authorization": f"Bearer {token}"}
+        self._account = account
 
     def decide(self, chat_name: str, text: str, is_group: bool, mentioned_me: bool) -> Optional[dict]:
         try:
@@ -147,6 +153,7 @@ class EngineClient:
                     "is_group": is_group,
                     "mentioned_me": mentioned_me,
                     "platform": "macos",
+                    "account": self._account,
                 },
                 headers=self._headers,
                 timeout=15,
@@ -214,7 +221,12 @@ def main() -> int:
         logger.error("请设置 WXAUTO_TOKEN，与规则服务保持一致")
         return 1
 
-    engine = EngineClient(os.environ.get("WXAUTO_SERVER", "http://127.0.0.1:8848"), token)
+    account = os.environ.get("WXAUTO_ACCOUNT", "")
+    engine = EngineClient(
+        os.environ.get("WXAUTO_SERVER", "http://127.0.0.1:8848"), token, account
+    )
+    if account:
+        logger.info("驱动的微信号: %s", account)
     logger.info("启动，每 %.0fs 扫一次%s", args.interval, "（DRY-RUN）" if args.dry_run else "")
 
     try:
