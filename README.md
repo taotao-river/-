@@ -187,8 +187,34 @@ persona:
     - {them: "明天有空不", me: "我看下日程，晚点回你"}
 ```
 
-需要 `export ANTHROPIC_API_KEY=...`（或先跑 `ant auth login`）。
 完整示例：[`core/config.ai.example.yaml`](core/config.ai.example.yaml)。
+
+### 接哪家模型
+
+```yaml
+llm:
+  provider: doubao        # 默认。key 从 ARK_API_KEY 读
+```
+
+| provider | 谁家 | key 从哪读 |
+|---|---|---|
+| `doubao` | 豆包（火山方舟） | `ARK_API_KEY` |
+| `deepseek` | DeepSeek | `DEEPSEEK_API_KEY` |
+| `qwen` | 通义千问 | `DASHSCOPE_API_KEY` |
+| `zhipu` | 智谱 GLM | `ZHIPU_API_KEY` |
+| `moonshot` | Moonshot | `MOONSHOT_API_KEY` |
+| `anthropic` | Claude | `ANTHROPIC_API_KEY` |
+
+**默认是豆包**：这套东西要的是「聊天像真人」而不是解数学题，
+豆包的中文口语是这几家里最自然的，国内直连、注册即用。
+Claude 那条路留着，但在国内拿 key 并不容易。
+
+前五家都是 OpenAI 兼容接口，用标准库实现，装不装 `anthropic` 都能跑。
+`model` 和 `base_url` 留空就用该家默认值。
+
+> 火山方舟的 `model` 比较特殊：模型 ID（`doubao-seed-1-6-251015`）
+> 和推理接入点（`ep-` 开头）都能填，而模型 ID 带日期后缀会随版本变。
+> 报「模型名不对」时去控制台复制一个填进去。
 
 **先在预览里调语气再上线**——你的联系人会看到这些话：
 
@@ -207,7 +233,7 @@ python3 -m core.preview        # 打字模拟对方发消息，不会真发出�
 | | 自己的 key | 用别人给的地址 |
 |---|---|---|
 | 填什么 | 接口地址 + API Key + 模型名 | 地址 + 口令 |
-| 打给谁 | DeepSeek / 通义千问 / 智谱 / Moonshot（预置好，点一下自动填） | 本仓库的 `server/app.py` |
+| 打给谁 | 豆包 / DeepSeek / 千问 / 智谱 / Moonshot（预置好，点一下自动填） | 本仓库的 `server/app.py` |
 | 依赖别人吗 | ❌ 不依赖 | ✅ 对方关机就不回了 |
 
 第一条路是给「想自己独立用」的人准备的，国内直连、不用翻墙；第二条是给
@@ -273,6 +299,8 @@ core/           规则引擎（纯逻辑，60 个单测覆盖）
   config.py       YAML 解析 + 校验（配置写错会明确报哪一项）
   persona.py      人设、应对攻略、对话记忆、提示词拼装
   wizard.py       开场问答：十道题 → 整套回复内容
+  providers.py    能接哪些模型服务（豆包/DeepSeek/千问/智谱/Moonshot）
+  llm_openai.py   OpenAI 兼容接口生成（只用标准库）
   llm.py          Claude 生成（多轮上下文、拒答处理、超长截断）
   preview.py      终端预览：不发消息就能调语气
 server/app.py   HTTP 服务，各端共用

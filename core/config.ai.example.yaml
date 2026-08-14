@@ -28,9 +28,25 @@ limits:
   max_delay_seconds: 15
 
 llm:
-  model: claude-opus-5
-  effort: low            # 自动回复要低延迟，不需要深度推理
+  # 接哪家模型。默认豆包——这套东西要的是「聊天像真人」，
+  # 它的中文口语最自然，国内直连、注册即用。
+  #
+  #   doubao     豆包（火山方舟）  key 从 ARK_API_KEY 读
+  #   deepseek   DeepSeek         DEEPSEEK_API_KEY
+  #   qwen       通义千问          DASHSCOPE_API_KEY
+  #   zhipu      智谱 GLM         ZHIPU_API_KEY
+  #   moonshot   Moonshot         MOONSHOT_API_KEY
+  #   anthropic  Claude           ANTHROPIC_API_KEY（国内不好注册）
+  provider: doubao
+
+  # 留空就用上面那家的默认模型。
+  # 火山方舟这里比较特殊：模型 ID 和推理接入点（ep- 开头）都能填，
+  # 而模型 ID 带日期后缀会随版本变——报「模型名不对」时去控制台复制一个。
+  model: doubao-seed-1-6-251015
+
   max_tokens: 300
+  # effort 只对 Claude 有效
+  effort: low            # 自动回复要低延迟，不需要深度推理
 
 # ============================================================
 # 人设 —— 这一段决定了回复像不像你本人

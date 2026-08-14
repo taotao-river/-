@@ -47,13 +47,30 @@ Termux 敲命令是不现实的。
 | 依赖别人吗 | ❌ 不依赖 | ✅ 对方关机就不回了 |
 | 消息经过谁 | 用户选的那家接口 | 对方的服务器 + 那家接口 |
 
-`OpenAiCompatibleWriter.PRESETS` 里预置了 DeepSeek / 通义千问 /
-智谱 GLM / Moonshot 的地址和模型名，这四家都是 OpenAI 兼容格式，
-国内直连没问题。设置页把它们做成了按钮——「接口地址填什么」是
-非技术用户最容易卡住的地方。
+`OpenAiCompatibleWriter.PRESETS` 里预置了豆包 / DeepSeek / 通义千问 /
+智谱 GLM / Moonshot 的地址和模型名，都是 OpenAI 兼容格式，国内直连。
+设置页把它们做成了按钮——「接口地址填什么」是非技术用户最容易卡住的地方。
+
+**豆包放第一个**：这套东西要的是「聊天像真人」而不是解数学题，
+它的中文口语是这几家里最自然的。Python 端有同一张表
+（`core/providers.py`），两边保持一致。
+
+火山方舟的 `model` 字段比较特殊：模型 ID（`doubao-seed-1-6-251015`）
+和推理接入点（`ep-` 开头）都接受，而模型 ID 带日期后缀会随版本变。
+所以 `Preset` 带一个 `note` 字段，选中时显示在设置页上——
+不说清楚的话，用户只会看到「不回复」而不知道为什么。
 
 要加一家，往 `PRESETS` 里加一行就行，只要对方支持
-`POST {baseUrl}/chat/completions`。
+`POST {baseUrl}/chat/completions`。记得 `core/providers.py` 也加一条。
+
+### 失败要能照着修
+
+非技术用户不会看 logcat，所以 `AiWriterException` 把 HTTP 状态码
+翻译成能直接照着做的话（401→key 不对、404→模型名不对去控制台复制、
+402→余额不足），经由引擎的 `Decision.reason` 显示在「试一试」里。
+
+引擎照样捕获它并退化成「不回复」，线上行为没有变化——变的只是
+用户能不能自己查出问题。
 
 ## 开场问答
 
