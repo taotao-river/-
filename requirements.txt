@@ -1,0 +1,13 @@
+# 核心引擎
+PyYAML>=6.0
+
+# HTTP 服务（server/app.py）
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+
+# LLM 兜底（fallback.type = llm 时才需要）
+anthropic>=0.40
+
+# 测试
+pytest>=8.0

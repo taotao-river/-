@@ -1,0 +1,309 @@
+"""引擎单测。不联网、不碰微信，纯逻辑验证。"""
+
+from __future__ import annotations
+
+import pytest
+
+from core.config import ConfigError, build_config
+from core.engine import ReplyEngine
+from core.models import IncomingMessage
+
+
+class FakeClock:
+    def __init__(self, start: float = 1_700_000_000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+BASE_CONFIG = {
+    "enabled": True,
+    "scope": {"reply_to_private": True, "reply_to_group": "only_at_me"},
+    "limits": {
+        "per_chat_cooldown_seconds": 600,
+        "max_replies_per_chat_per_day": 3,
+        "global_max_replies_per_hour": 10,
+        "min_delay_seconds": 1,
+        "max_delay_seconds": 2,
+    },
+    "rules": [
+        {"name": "在吗", "match": {"type": "keyword", "any": ["在吗"]}, "reply": "在的"},
+    ],
+    "fallback": {"type": "text", "text": "稍后回复"},
+}
+
+
+def make_engine(overrides: dict | None = None, clock: FakeClock | None = None) -> tuple[ReplyEngine, FakeClock]:
+    data = {**BASE_CONFIG, **(overrides or {})}
+    clock = clock or FakeClock()
+    return ReplyEngine(build_config(data), clock=clock), clock
+
+
+def msg(text: str, **kwargs) -> IncomingMessage:
+    kwargs.setdefault("chat_id", "chat-1")
+    kwargs.setdefault("chat_name", "小王")
+    return IncomingMessage(text=text, **kwargs)
+
+
+# ------------------------------------------------------------------ 基本匹配
+
+
+def test_keyword_rule_hits():
+    engine, _ = make_engine()
+    decision = engine.decide(msg("在吗？"))
+    assert decision.should_reply
+    assert decision.text == "在的"
+    assert decision.rule_name == "在吗"
+
+
+def test_falls_back_when_no_rule_matches():
+    engine, _ = make_engine()
+    decision = engine.decide(msg("今天天气不错"))
+    assert decision.should_reply
+    assert decision.text == "稍后回复"
+    assert decision.rule_name is None
+
+
+def test_regex_rule():
+    engine, _ = make_engine(
+        {"rules": [{"name": "价格", "match": {"type": "regex", "pattern": r"多少钱|报价"}, "reply": "私聊报价"}]}
+    )
+    assert engine.decide(msg("这个多少钱")).text == "私聊报价"
+
+
+def test_empty_message_skipped():
+    engine, _ = make_engine()
+    assert not engine.decide(msg("   ")).should_reply
+
+
+def test_signature_appended():
+    engine, _ = make_engine({"signature": "[自动]"})
+    assert engine.decide(msg("在吗")).text == "在的[自动]"
+
+
+# ------------------------------------------------------------------ 安全优先
+
+
+@pytest.mark.parametrize("text", ["帮我转账 500", "发个红包", "验证码是多少", "借钱应急"])
+def test_hard_block_keywords_never_replied(text):
+    """即使冷却为 0、规则全匹配，敏感词也必须拦住。"""
+    engine, _ = make_engine(
+        {
+            "limits": {**BASE_CONFIG["limits"], "per_chat_cooldown_seconds": 0},
+            "rules": [{"name": "全匹配", "match": {"type": "always"}, "reply": "好的"}],
+        }
+    )
+    decision = engine.decide(msg(text))
+    assert not decision.should_reply
+    assert "敏感词" in decision.reason
+
+
+def test_hard_block_beats_rate_limit_ordering():
+    """敏感词判断必须早于频率判断，否则日志会误导排查。"""
+    engine, _ = make_engine()
+    engine.decide(msg("在吗"))  # 先占用冷却
+    decision = engine.decide(msg("帮我转账"))
+    assert "敏感词" in decision.reason  # 而不是「冷却中」
+
+
+def test_blocked_contact():
+    engine, _ = make_engine({"scope": {**BASE_CONFIG["scope"], "block_contacts": ["老板"]}})
+    assert not engine.decide(msg("在吗", chat_name="老板")).should_reply
+
+
+def test_allowlist_excludes_others():
+    engine, _ = make_engine({"scope": {**BASE_CONFIG["scope"], "allow_contacts": ["小王"]}})
+    assert engine.decide(msg("在吗", chat_name="小王")).should_reply
+    assert not engine.decide(msg("在吗", chat_id="c2", chat_name="小李")).should_reply
+
+
+# ------------------------------------------------------------------ 群聊策略
+
+
+def test_group_only_at_me():
+    engine, _ = make_engine()
+    assert not engine.decide(msg("在吗", is_group=True)).should_reply
+    assert engine.decide(msg("在吗", is_group=True, mentioned_me=True)).should_reply
+
+
+def test_group_never():
+    engine, _ = make_engine({"scope": {**BASE_CONFIG["scope"], "reply_to_group": "never"}})
+    assert not engine.decide(msg("在吗", is_group=True, mentioned_me=True)).should_reply
+
+
+def test_private_disabled():
+    engine, _ = make_engine({"scope": {**BASE_CONFIG["scope"], "reply_to_private": False}})
+    assert not engine.decide(msg("在吗")).should_reply
+
+
+# ------------------------------------------------------------------ 频率限制
+
+
+def test_cooldown_blocks_second_reply():
+    engine, clock = make_engine()
+    assert engine.decide(msg("在吗")).should_reply
+    assert not engine.decide(msg("在吗")).should_reply
+    clock.advance(601)
+    assert engine.decide(msg("在吗")).should_reply
+
+
+def test_daily_cap_per_chat():
+    engine, clock = make_engine()
+    for _ in range(3):
+        assert engine.decide(msg("在吗")).should_reply
+        clock.advance(601)
+    decision = engine.decide(msg("在吗"))
+    assert not decision.should_reply
+    assert "今日已达上限" in decision.reason
+
+
+def test_daily_cap_resets_after_24h():
+    engine, clock = make_engine()
+    for _ in range(3):
+        engine.decide(msg("在吗"))
+        clock.advance(601)
+    clock.advance(24 * 3600)
+    assert engine.decide(msg("在吗")).should_reply
+
+
+def test_global_hourly_cap():
+    engine, clock = make_engine(
+        {"limits": {**BASE_CONFIG["limits"], "per_chat_cooldown_seconds": 0, "global_max_replies_per_hour": 2}}
+    )
+    assert engine.decide(msg("在吗", chat_id="a", chat_name="A")).should_reply
+    assert engine.decide(msg("在吗", chat_id="b", chat_name="B")).should_reply
+    decision = engine.decide(msg("在吗", chat_id="c", chat_name="C"))
+    assert not decision.should_reply
+    assert "全局一小时上限" in decision.reason
+
+
+def test_cooldown_is_per_chat():
+    engine, _ = make_engine()
+    assert engine.decide(msg("在吗", chat_id="a", chat_name="A")).should_reply
+    assert engine.decide(msg("在吗", chat_id="b", chat_name="B")).should_reply
+
+
+# ------------------------------------------------------------------ 时间段
+
+
+def test_active_hours_respected():
+    # 1700000000 UTC = 2023-11-14 22:13:20；用一个必然不包含当前时刻的窗口
+    engine, _ = make_engine({"active_hours": ["03:00-03:01"]})
+    decision = engine.decide(msg("在吗"))
+    assert not decision.should_reply
+    assert "时段" in decision.reason
+
+
+def test_no_active_hours_means_always_on():
+    engine, _ = make_engine({"active_hours": []})
+    assert engine.decide(msg("在吗")).should_reply
+
+
+# ------------------------------------------------------------------ 文案轮换
+
+
+def test_replies_rotate():
+    engine, clock = make_engine(
+        {
+            "limits": {
+                **BASE_CONFIG["limits"],
+                "per_chat_cooldown_seconds": 0,
+                "max_replies_per_chat_per_day": 10,
+            },
+            "rules": [{"name": "多文案", "match": {"type": "keyword", "any": ["在吗"]}, "reply": ["A", "B"]}],
+        }
+    )
+    texts = []
+    for _ in range(4):
+        texts.append(engine.decide(msg("在吗")).text)
+        clock.advance(1)
+    assert texts == ["A", "B", "A", "B"]
+
+
+# ------------------------------------------------------------------ LLM 兜底
+
+
+def test_llm_fallback_used():
+    engine, _ = make_engine(
+        {"fallback": {"type": "llm"}, "rules": []},
+    )
+    engine._llm_reply = lambda m, c: f"收到：{m.text}"
+    assert engine.decide(msg("随便说点什么")).text == "收到：随便说点什么"
+
+
+def test_llm_failure_does_not_crash():
+    engine, _ = make_engine({"fallback": {"type": "llm"}, "rules": []})
+
+    def boom(m, c):
+        raise RuntimeError("network down")
+
+    engine._llm_reply = boom
+    decision = engine.decide(msg("你好"))
+    assert not decision.should_reply
+    assert "LLM 生成失败" in decision.reason
+
+
+def test_llm_failure_does_not_consume_quota():
+    """生成失败不该白白吃掉一次冷却额度。"""
+    engine, _ = make_engine({"fallback": {"type": "llm"}, "rules": []})
+    engine._llm_reply = lambda m, c: None
+    engine.decide(msg("你好"))
+    engine._llm_reply = lambda m, c: "这次成功了"
+    assert engine.decide(msg("你好")).should_reply
+
+
+def test_fallback_none_skips():
+    engine, _ = make_engine({"fallback": {"type": "none"}, "rules": []})
+    assert not engine.decide(msg("你好")).should_reply
+
+
+# ------------------------------------------------------------------ 配置校验
+
+
+def test_bad_group_policy_rejected():
+    with pytest.raises(ConfigError, match="reply_to_group"):
+        build_config({"scope": {"reply_to_group": "sometimes"}})
+
+
+def test_bad_time_range_rejected():
+    with pytest.raises(ConfigError, match="active_hours"):
+        build_config({"active_hours": ["9点到12点"]})
+
+
+def test_bad_regex_rejected():
+    with pytest.raises(ConfigError, match="正则"):
+        build_config({"rules": [{"name": "x", "match": {"type": "regex", "pattern": "["}, "reply": "y"}]})
+
+
+def test_rule_without_reply_rejected():
+    with pytest.raises(ConfigError, match="缺少 reply"):
+        build_config({"rules": [{"name": "x", "match": {"type": "keyword", "any": ["a"]}}]})
+
+
+def test_delay_range_validated():
+    with pytest.raises(ConfigError, match="min_delay_seconds"):
+        build_config({"limits": {"min_delay_seconds": 10, "max_delay_seconds": 2}})
+
+
+# ------------------------------------------------------------------ 状态持久化
+
+
+def test_state_survives_restart(tmp_path):
+    state = tmp_path / "state.json"
+    clock = FakeClock()
+    engine = ReplyEngine(build_config(BASE_CONFIG), state_path=state, clock=clock)
+    assert engine.decide(msg("在吗")).should_reply
+
+    reborn = ReplyEngine(build_config(BASE_CONFIG), state_path=state, clock=clock)
+    assert not reborn.decide(msg("在吗")).should_reply  # 冷却状态被读回来了
+
+
+def test_corrupt_state_file_does_not_crash(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text("{not json", encoding="utf-8")
+    engine = ReplyEngine(build_config(BASE_CONFIG), state_path=state, clock=FakeClock())
+    assert engine.decide(msg("在吗")).should_reply

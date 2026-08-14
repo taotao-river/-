@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 运行时状态：冷却计数、每日额度
+var/
+core/config.yaml          # 个人规则，含联系人姓名，不入库
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+
+# Theos
+ios/tweak/.theos/
+ios/tweak/packages/
+*.deb
+
+.DS_Store
