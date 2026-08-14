@@ -26,50 +26,57 @@ iPhone 和 Mac 登的是同一个微信号，消息两边都会到。Mac 上的 
 这直接省掉了两条最麻烦的路：**不用 Appium**（要占着手机、锁屏就停），
 **也不用越狱**。`ios/` 目录你可以整个忽略。
 
-### Mac 上跑两个东西
+### Mac 上一条命令
 
 ```bash
-# 一次性准备
-cp core/config.example.yaml core/config.yaml   # 改成你的规则
-echo "export WXAUTO_TOKEN=$(openssl rand -hex 16)" >> ~/.zshrc
-source ~/.zshrc
+bash scripts/macos-setup.sh
 ```
+
+脚本做这些事：建虚拟环境装依赖、生成 `core/config.yaml` 和 token、
+把规则服务注册成 launchd 服务（开机自启、崩了自动拉起）、写好采集端
+启动脚本，最后做一次健康检查。
+
+之后还剩两步：
+
+1. **授权辅助功能**：系统设置 → 隐私与安全性 → 辅助功能 → 勾选「终端」。
+   不给这个权限，采集端读不到微信窗口。
+2. **先干跑再真发**：
+
+   ```bash
+   ./run-mac-bot.sh --dry-run    # 只打印，不发送
+   ./run-mac-bot.sh
+   ```
+
+服务只监听 `127.0.0.1`——服务和采集端都在这台 Mac 上，没必要开到局域网。
+你朋友的安卓跑的是他自己那套，不连你这台。
+
+采集端没做成 launchd 自启，是因为它需要辅助功能权限，而 launchd 拉起的
+进程权限归属容易出问题；`run-mac-bot.sh` 里带了 `caffeinate`，跑着的时候
+Mac 不会睡。另外记得把 系统设置 → 电池 → 睡眠 设成「永不」，否则合盖就停。
+
+**常用操作**
 
 ```bash
-# 终端 1：规则服务
-export WXAUTO_CONFIG=core/config.yaml
-uvicorn server.app:app --port 8848
+tail -f var/server.log          # 服务日志
+curl -X POST -H "Authorization: Bearer $(cat .wxauto_token)" \
+     http://127.0.0.1:8848/reload      # 改完规则热重载
+launchctl unload ~/Library/LaunchAgents/com.wxauto.server.plist   # 停服务
 ```
+
+### 想让 iPhone 单独工作（不越狱）？先看清代价
+
+Mac 关机时 iPhone 才有意义。不越狱要做到这点，只有「侧载改包微信」一条路，
+而它的真正门槛不是签名，是**你得从第三方拿一个解密过的微信 IPA**——
+等于把账号交给一个陌生人编译的客户端，风险比越狱你自己的手机更大。
+
+完整分析见 [`docs/ios-feasibility.md`](ios-feasibility.md) 路线 D。
+
+如果你确实走了那条路，或者用 Appium/越狱插件让 iPhone 也参与，
+**两端必须填相同的 `WXAUTO_ACCOUNT`**，否则同一条消息会被回两次：
 
 ```bash
-# 终端 2：采集端
-export WXAUTO_SERVER=http://127.0.0.1:8848
-python macos/wechat_mac_bot.py --dry-run    # 先干跑几轮
-python macos/wechat_mac_bot.py
+export WXAUTO_ACCOUNT=我      # Mac 和 iPhone 都填这个
 ```
-
-注意这里用默认的 `127.0.0.1` 就够了——服务和采集端都在 Mac 上，
-**不需要 `--host 0.0.0.0`**，也就不用担心局域网里其他人能访问。
-
-别忘了给终端授权：系统设置 → 隐私与安全性 → 辅助功能。
-
-### 如果你出门也想让 iPhone 顶上
-
-Mac 关机时 iPhone 才有意义。真要这么做的话：
-
-- iPhone 走 `ios/appium/`（需要 Mac 常插着，出门场景其实不成立）
-  或 `ios/tweak/`（需要越狱）
-- **两端必须填相同的 `WXAUTO_ACCOUNT`**，否则同一条消息会被回两次
-
-```bash
-# Mac
-export WXAUTO_ACCOUNT=我
-# iPhone (Appium)
-export WXAUTO_ACCOUNT=我
-```
-
-老实说：为了「出门那几小时」去折腾越狱或者常驻 Appium，性价比很低。
-更实际的做法是 Mac 别关机。
 
 ---
 
