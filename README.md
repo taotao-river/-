@@ -118,8 +118,8 @@ App 里点「授予通知使用权（必须）」→ 在系统页面里找到「
 也不用越狱**。
 
 ```bash
-git clone https://github.com/taotao-river/-.git
-cd -
+git clone https://github.com/taotao-river/wechat-auto-reply.git
+cd wechat-auto-reply
 bash scripts/macos-setup.sh      # 会停下来问你那十道题
 ```
 
