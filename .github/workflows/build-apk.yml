@@ -55,6 +55,10 @@ jobs:
           mkdir -p dist
           cp android/app/build/outputs/apk/debug/app-debug.apk \
              dist/微信自动回复.apk
+          # Release 资源用纯英文名：中文文件名在下载链接里会变成一长串
+          # 转义字符，没法直接发给人点
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             dist/wechat-auto-reply.apk
           ls -lh dist/
 
       # 每次构建都能在 Actions 页面下载到
@@ -72,9 +76,45 @@ jobs:
           path: dist/微信自动回复.apk
           retention-days: 90
 
-      # 打了 Release 的话，APK 直接挂到 Release 页面，链接可以直接发给别人
+      # 推到 main 就更新「最新版」这个 Release。
+      #
+      # 为什么值得单独做：Actions 的 Artifacts 必须登录 GitHub 才能下载、
+      # 是个 zip、而且 90 天后过期。要装 App 的人多半不用 GitHub，
+      # 让他去点「绿色的勾」再解压是不现实的。
+      # Release 给的是一个固定的、不用登录、手机浏览器点开就开始下载的地址：
+      #
+      #   https://github.com/<owner>/<repo>/releases/latest/download/wechat-auto-reply.apk
+      #
+      # 把这个链接直接发给他就行。
+      - name: 更新「最新版」下载链接
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: 最新版（手机上直接点就能装）
+          make_latest: true
+          body: |
+            ## 手机上怎么装
+
+            用**手机浏览器**打开下面这个链接，会直接开始下载：
+
+            https://github.com/${{ github.repository }}/releases/latest/download/wechat-auto-reply.apk
+
+            下载完点开安装。中途提示「禁止安装未知应用」，
+            按提示允许一下就行。
+
+            装完打开 App，它会先问你十道选择题，点一点就完事。
+
+            ---
+
+            这是 debug 签名的版本，只能这样直接安装，不在应用商店里。
+            自动构建于 ${{ github.sha }}
+          files: |
+            dist/wechat-auto-reply.apk
+
+      # 手动打 tag 发版时也附加一份
       - name: 附加到 Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/微信自动回复.apk
+          files: dist/wechat-auto-reply.apk
