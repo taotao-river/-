@@ -21,6 +21,9 @@ import android.widget.TextView
 import android.widget.Toast
 import com.wxauto.reply.engine.EngineConfig
 import com.wxauto.reply.engine.GroupPolicy
+import com.wxauto.reply.engine.InMemoryStateStore
+import com.wxauto.reply.engine.Message
+import com.wxauto.reply.engine.ReplyEngine
 import com.wxauto.reply.engine.Rule
 import com.wxauto.reply.engine.Storage
 
@@ -36,6 +39,9 @@ class MainActivity : Activity() {
     private lateinit var fallbackField: EditText
     private lateinit var blockContactsField: EditText
     private lateinit var rulesContainer: LinearLayout
+    private lateinit var testInput: EditText
+    private lateinit var testResult: TextView
+    private lateinit var testAsGroup: CheckBox
 
     private var groupNeverId = View.generateViewId()
     private var groupAtMeId = View.generateViewId()
@@ -141,6 +147,33 @@ class MainActivity : Activity() {
 
         root.addView(divider())
 
+        // ---- 试一试 ----
+        // 不真发消息就能看到会回什么。开启之前先在这里把文案调顺，
+        // 比让对方当小白鼠强。
+        root.addView(section("试一试（不会真的发出去）"))
+        testInput = EditText(this).apply {
+            hint = "假装别人发来一句话，比如：在吗"
+        }
+        root.addView(testInput)
+
+        testAsGroup = CheckBox(this).apply { text = "当作群里 @ 我的消息" }
+        root.addView(testAsGroup)
+
+        root.addView(Button(this).apply {
+            text = "看看会回什么"
+            setOnClickListener { runPreview() }
+        })
+
+        testResult = TextView(this).apply {
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            textSize = 15f
+        }
+        root.addView(testResult)
+
+        root.addView(hint("用的是你当前填的内容，不用先保存。试的时候不占用「每天最多回几条」的额度。"))
+
+        root.addView(divider())
+
         root.addView(Button(this).apply {
             text = "保存设置"
             setOnClickListener { saveFromUi() }
@@ -210,6 +243,12 @@ class MainActivity : Activity() {
     }
 
     private fun saveFromUi() {
+        Storage.saveConfig(this, buildConfigFromUi())
+        Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 把界面上当前填的内容组装成配置。保存和「试一试」共用，避免两边不一致。 */
+    private fun buildConfigFromUi(): EngineConfig {
         val rules = ArrayList<Rule>()
         for (i in 0 until rulesContainer.childCount) {
             val row = rulesContainer.getChildAt(i) as? ViewGroup ?: continue
@@ -230,15 +269,56 @@ class MainActivity : Activity() {
             else -> GroupPolicy.NEVER
         }
 
-        val updated = Storage.loadConfig(this).copy(
+        return Storage.loadConfig(this).copy(
             enabled = masterSwitch.isChecked,
             groupPolicy = policy,
             rules = rules,
             fallbackText = fallbackField.text.toString().trim(),
             blockContacts = splitList(blockContactsField.text.toString()),
         )
-        Storage.saveConfig(this, updated)
-        Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 试一试：用一个全新的内存状态跑一次引擎。
+     *
+     * 用 InMemoryStateStore 而不是真实存储，所以既不会被冷却挡住
+     * （否则试第二次就没反应了），也不会吃掉真实的每日额度。
+     * 敏感词、群聊策略、黑名单照常生效——那些正是要看的东西。
+     */
+    private fun runPreview() {
+        val text = testInput.text.toString().trim()
+        if (text.isEmpty()) {
+            testResult.text = "先在上面输入一句话"
+            testResult.setTextColor(Color.parseColor("#757575"))
+            return
+        }
+
+        // 忽略总开关和时段，其余全部照常
+        val config = buildConfigFromUi().copy(
+            enabled = true,
+            activeFromMinute = -1,
+            activeToMinute = -1,
+        )
+        val isGroup = testAsGroup.isChecked
+        val decision = ReplyEngine(InMemoryStateStore()).decide(
+            config,
+            Message(
+                chatId = "preview",
+                chatName = "测试联系人",
+                text = text,
+                isGroup = isGroup,
+                mentionedMe = isGroup,
+            ),
+        )
+
+        if (decision.shouldReply) {
+            testResult.text = "✅ 会回复：\n${decision.text}\n\n（${decision.reason}，" +
+                "${decision.delayMillis / 1000} 秒后发出）"
+            testResult.setTextColor(Color.parseColor("#2E7D32"))
+        } else {
+            testResult.text = "⛔ 不会回复\n原因：${decision.reason}"
+            testResult.setTextColor(Color.parseColor("#D32F2F"))
+        }
     }
 
     /** 中英文逗号都当分隔符——用户不该被要求分清全角半角。 */

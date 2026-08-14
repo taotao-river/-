@@ -480,3 +480,29 @@ def test_identity_separates_accounts():
     a = IncomingMessage(chat_id="x", chat_name="小王", text="hi", account="工作号")
     b = IncomingMessage(chat_id="y", chat_name="小王", text="hi", account="私人号")
     assert chat_identity(a) != chat_identity(b)
+
+
+# ------------------------------------------------------------------ 预览工具
+
+
+def test_preview_config_ignores_switch_and_hours():
+    """预览要忽略总开关和时段，但敏感词等安全判断必须照常生效。"""
+    from core.preview import _for_preview
+
+    original = build_config({**BASE_CONFIG, "enabled": False, "active_hours": ["03:00-03:01"]})
+    preview = _for_preview(original)
+
+    assert preview.enabled
+    assert preview.active_hours == []
+    # 原配置不能被改动——预览不该影响正在跑的服务
+    assert not original.enabled
+    assert len(original.active_hours) == 1
+
+
+def test_preview_still_blocks_sensitive_words():
+    from core.preview import _for_preview
+
+    engine = ReplyEngine(_for_preview(build_config(BASE_CONFIG)), clock=FakeClock())
+    decision = engine.decide(msg("帮我转账 500"))
+    assert not decision.should_reply
+    assert "敏感词" in decision.reason
