@@ -20,3 +20,10 @@ ios/tweak/packages/
 *.deb
 
 .DS_Store
+
+# 安装脚本在用户机器上生成的启动器与凭据
+/试运行（不真发消息）.command
+/开始自动回复.command
+/run-mac-bot.sh
+/run-server.sh
+.wxauto_token
