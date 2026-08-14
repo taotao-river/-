@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .persona import Persona, build_persona
+from .providers import ANTHROPIC, PROVIDERS, describe, is_openai_compatible
 
 import yaml
 
@@ -59,7 +60,15 @@ class Scope:
 @dataclass
 class LLMSettings:
     enabled: bool = False
-    model: str = "claude-opus-5"
+    provider: str = "anthropic"
+    """anthropic 走官方 SDK；其余见 core/providers.py，都是 OpenAI 兼容接口。
+    国内拿 Anthropic key 不容易，所以豆包这类是一等公民而不是补丁。"""
+    model: str = ""
+    """留空时用 provider 的默认模型。"""
+    base_url: str = ""
+    """留空时用 provider 的默认地址。自建代理才需要填。"""
+    api_key: str = ""
+    """尽量别写在配置文件里——默认从环境变量读，见 llm_openai.build_writer。"""
     max_tokens: int = 300
     effort: str = "low"
     style: str = "用简短口语化的中文回复，不超过 30 个字。"
@@ -174,9 +183,20 @@ def build_config(data: dict[str, Any]) -> Config:
         )
 
     llm_raw = data.get("llm") or {}
+    provider = str(llm_raw.get("provider", "anthropic")).strip().lower()
+    if provider != ANTHROPIC and not is_openai_compatible(provider):
+        raise ConfigError(
+            f"llm.provider 只能是 {describe()}，收到 {provider!r}"
+        )
+
+    # 模型和地址留空时用这家的默认值，用户不用去查文档抄 URL
+    default_model = "claude-opus-5" if provider == ANTHROPIC else PROVIDERS[provider].model
     llm = LLMSettings(
         enabled=mode in ("ai", "rules_then_ai") and fallback_kind == "llm" or mode == "ai",
-        model=llm_raw.get("model", "claude-opus-5"),
+        provider=provider,
+        model=llm_raw.get("model") or default_model,
+        base_url=llm_raw.get("base_url", ""),
+        api_key=llm_raw.get("api_key", ""),
         max_tokens=int(llm_raw.get("max_tokens", 300)),
         effort=llm_raw.get("effort", "low"),
         style=llm_raw.get("style", LLMSettings.style),

@@ -25,6 +25,27 @@ interface AiWriter {
     fun write(message: Message, config: EngineConfig): String?
 }
 
+/**
+ * 能说清楚「哪儿填错了」的失败。
+ *
+ * 为什么要专门抛异常而不是返回 null：返回 null 时引擎只会说
+ * 「AI 没返回可用内容」，用户看不出是 key 错了还是模型名错了，
+ * 而他又不会看 logcat。异常的 message 会一路传到设置页的「试一试」里。
+ *
+ * 引擎照样会捕获它并退化成「不回复」，所以线上行为没有变化。
+ */
+class AiWriterException(message: String) : Exception(message)
+
+/** HTTP 状态码翻译成用户能照着做的话。 */
+fun explainHttp(code: Int, body: String): String = when (code) {
+    401, 403 -> "API Key 不对或者没权限，检查一下有没有粘全"
+    404 -> "模型名不对，去控制台把模型 ID 复制过来"
+    402 -> "余额不足，去控制台充点钱"
+    429 -> "调用太频繁，或者免费额度用完了"
+    in 500..599 -> "对方服务器出问题了，过会儿再试"
+    else -> "接口返回 $code：${body.take(120)}"
+}
+
 /** 拼系统提示词。和 Python 版 core/persona.py 保持同一套结构。 */
 fun buildSystemPrompt(p: PersonaConfig): String {
     val parts = mutableListOf(
@@ -75,12 +96,10 @@ class OpenAiCompatibleWriter(
     override fun write(message: Message, config: EngineConfig): String? {
         val persona = config.persona
         if (!persona.isConfigured()) {
-            Log.w(TAG, "没配人设，跳过——空人设只会生成客服腔")
-            return null
+            throw AiWriterException("没写人设，先去回答那十个问题")
         }
         if (apiKey.isBlank() || baseUrl.isBlank()) {
-            Log.w(TAG, "没填接口地址或 key")
-            return null
+            throw AiWriterException("接口地址或 API Key 是空的")
         }
 
         memory.remember(message.chatName, Speaker.THEM, message.text)
@@ -118,10 +137,11 @@ class OpenAiCompatibleWriter(
             }
             conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
 
-            if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+            val code = conn.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
                 val err = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                Log.w(TAG, "接口返回 ${conn.responseCode}：${err.take(200)}")
-                return null
+                Log.w(TAG, "接口返回 $code：${err.take(200)}")
+                throw AiWriterException(explainHttp(code, err))
             }
 
             val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
@@ -136,11 +156,11 @@ class OpenAiCompatibleWriter(
                 memory.remember(message.chatName, Speaker.ME, it)
             }
         } catch (e: IOException) {
-            Log.w(TAG, "网络失败，本条跳过：${e.message}")
-            null
+            Log.w(TAG, "网络失败：${e.message}")
+            throw AiWriterException("连不上接口，检查手机能不能上网")
         } catch (e: org.json.JSONException) {
             Log.w(TAG, "返回内容不是合法 JSON：${e.message}")
-            null
+            throw AiWriterException("接口返回的内容看不懂，可能地址填错了")
         } finally {
             conn?.disconnect()
         }
@@ -149,16 +169,50 @@ class OpenAiCompatibleWriter(
     companion object {
         private const val TAG = "OpenAiWriter"
 
-        /** 常见接口的预设，填进设置页当提示用。 */
+        /**
+         * 常见接口的预设，填进设置页当提示用。
+         *
+         * 豆包放第一个：这套东西要的是「聊天像真人」，不是解数学题，
+         * 而豆包的中文口语是这几家里最自然的，价格也便宜。
+         */
         val PRESETS = listOf(
-            Preset("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
-            Preset("通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
-            Preset("智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
-            Preset("Moonshot", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+            Preset(
+                name = "豆包",
+                baseUrl = "https://ark.cn-beijing.volces.com/api/v3",
+                model = "doubao-seed-1-6-251015",
+                note = "在火山方舟控制台建 API Key。如果提示「模型名不对」，" +
+                    "去控制台把模型 ID（或推理接入点 ep- 开头那串）复制到下面的模型名里。",
+            ),
+            Preset(
+                name = "DeepSeek",
+                baseUrl = "https://api.deepseek.com/v1",
+                model = "deepseek-chat",
+            ),
+            Preset(
+                name = "通义千问",
+                baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                model = "qwen-plus",
+            ),
+            Preset(
+                name = "智谱 GLM",
+                baseUrl = "https://open.bigmodel.cn/api/paas/v4",
+                model = "glm-4-flash",
+            ),
+            Preset(
+                name = "Moonshot",
+                baseUrl = "https://api.moonshot.cn/v1",
+                model = "moonshot-v1-8k",
+            ),
         )
     }
 
-    data class Preset(val name: String, val baseUrl: String, val model: String)
+    data class Preset(
+        val name: String,
+        val baseUrl: String,
+        val model: String,
+        /** 这一家有什么特别要注意的，选中时显示给用户。 */
+        val note: String = "",
+    )
 }
 
 // ---------------------------------------------------------------- 用别人的地址
@@ -200,23 +254,28 @@ class RelayWriter(
             }
             conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
 
-            if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                Log.w(TAG, "对方服务返回 ${conn.responseCode}")
-                return null
+            val code = conn.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
+                Log.w(TAG, "对方服务返回 $code")
+                throw AiWriterException(
+                    if (code == 401 || code == 403) "口令不对，问对方要一下"
+                    else explainHttp(code, "")
+                )
             }
 
             val json = JSONObject(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
             if (!json.optBoolean("should_reply", false)) {
+                // 这不是错误：对方那边的规则判断了不该回，照做就是
                 Log.i(TAG, "对方服务判断不回复：${json.optString("reason")}")
                 return null
             }
             json.optString("text").takeIf { it.isNotBlank() }
         } catch (e: IOException) {
-            Log.w(TAG, "连不上对方服务，本条跳过：${e.message}")
-            null
+            Log.w(TAG, "连不上对方服务：${e.message}")
+            throw AiWriterException("连不上对方的地址，可能他电脑没开机")
         } catch (e: org.json.JSONException) {
             Log.w(TAG, "对方服务返回了非法 JSON：${e.message}")
-            null
+            throw AiWriterException("对方服务返回的内容看不懂，地址可能填错了")
         } finally {
             conn?.disconnect()
         }

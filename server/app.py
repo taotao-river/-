@@ -42,11 +42,17 @@ def _build_engine() -> ReplyEngine:
 
     llm_reply = None
     if config.llm.enabled:
-        # 只有真要用 LLM 时才 import，免得没装 anthropic 的人跑不起来
-        from core.llm import ClaudeReplyWriter
+        if config.llm.provider == "anthropic":
+            # 只有真要用 Claude 时才 import，免得没装 anthropic 的人跑不起来
+            from core.llm import ClaudeReplyWriter
 
-        llm_reply = ClaudeReplyWriter()
-        logger.info("LLM 兜底已启用，模型 %s", config.llm.model)
+            llm_reply = ClaudeReplyWriter()
+        else:
+            # 豆包这类走 OpenAI 兼容接口，只用标准库，没有额外依赖
+            from core.llm_openai import build_writer
+
+            llm_reply = build_writer(config)
+        logger.info("AI 生成已启用：%s / %s", config.llm.provider, config.llm.model)
 
     return ReplyEngine(config, llm_reply=llm_reply, state_path=STATE_PATH)
 

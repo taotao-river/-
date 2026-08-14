@@ -303,6 +303,73 @@ class AiReplyTest {
         assertEquals(listOf("给小李的"), memory.recent("小李").map { it.text })
     }
 
+    // ------------------------------------------------------------ 报错要能照着做
+
+    @Test
+    fun httpErrorsTellTheUserWhatToFix() {
+        // 用户不会看 logcat。这些话会经由引擎的 reason 显示在「试一试」里，
+        // 所以每一条都得能直接照着做，不能只说「请求失败」。
+        assertTrue(explainHttp(401, "").contains("API Key"))
+        assertTrue(explainHttp(403, "").contains("API Key"))
+        assertTrue(explainHttp(404, "").contains("模型名"))
+        assertTrue(explainHttp(402, "").contains("余额"))
+        assertTrue(explainHttp(429, "").contains("额度"))
+        assertTrue(explainHttp(503, "").contains("服务器"))
+    }
+
+    @Test
+    fun unknownStatusStillCarriesTheServerMessage() {
+        val explained = explainHttp(418, "teapot detail here")
+        assertTrue(explained.contains("418"))
+        assertTrue(explained.contains("teapot"))
+    }
+
+    @Test
+    fun writerFailureSurfacesAsAReadableReason() {
+        // AiWriterException 的话要一路传到用户眼前，不能被吞成
+        // 「AI 没返回可用内容」——那句话没法照着修
+        val writer = object : AiWriter {
+            override fun write(message: Message, config: EngineConfig): String? =
+                throw AiWriterException(explainHttp(404, ""))
+        }
+        val decision = engineWith(writer).decide(config(), msg("在吗"))
+        assertFalse(decision.shouldReply)
+        assertTrue(decision.reason, decision.reason.contains("模型名"))
+    }
+
+    // ------------------------------------------------------------ 厂商预设
+
+    @Test
+    fun doubaoIsOfferedFirst() {
+        // 这套东西要的是「聊天像真人」，豆包的中文口语最自然，
+        // 而设置页上第一个按钮就是多数人会点的那个
+        assertEquals("豆包", OpenAiCompatibleWriter.PRESETS.first().name)
+    }
+
+    @Test
+    fun everyPresetIsUsableAsIs() {
+        OpenAiCompatibleWriter.PRESETS.forEach { preset ->
+            assertTrue(preset.name, preset.baseUrl.startsWith("https://"))
+            assertTrue(preset.name, preset.model.isNotBlank())
+            // 地址不该自带 /chat/completions，那段是调用时拼的
+            assertFalse(preset.name, preset.baseUrl.trimEnd('/').endsWith("chat/completions"))
+        }
+    }
+
+    @Test
+    fun doubaoWarnsAboutItsModelIdQuirk() {
+        // 火山方舟的 model 既可能是模型 ID 也可能是 ep- 接入点，
+        // 而且带日期后缀会变——不说清楚，用户只会看到「不回复」
+        val doubao = OpenAiCompatibleWriter.PRESETS.first { it.name == "豆包" }
+        assertTrue(doubao.note.contains("模型 ID") || doubao.note.contains("ep-"))
+    }
+
+    @Test
+    fun presetsHaveDistinctEndpoints() {
+        val urls = OpenAiCompatibleWriter.PRESETS.map { it.baseUrl }
+        assertEquals(urls.size, urls.toSet().size)
+    }
+
     // ------------------------------------------------------------ 生成器选择
 
     @Test

@@ -64,6 +64,7 @@ class MainActivity : Activity() {
     private lateinit var baseUrlField: EditText
     private lateinit var apiKeyField: EditText
     private lateinit var modelField: EditText
+    private lateinit var presetNote: TextView
     private lateinit var relayUrlField: EditText
     private lateinit var relayTokenField: EditText
 
@@ -347,7 +348,8 @@ class MainActivity : Activity() {
         ownKeyPanel.addView(hint(
             "去下面任意一家的官网注册，在「API Key」页面点一下新建，" +
                 "把那串字符复制过来。国内直接能用，不用翻墙。多数家新注册都送额度，" +
-                "自动回复用量很小，基本花不到钱。"
+                "自动回复用量很小，基本花不到钱。\n\n" +
+                "不知道选哪个就选豆包——聊天的中文语气这几家里它最自然。"
         ))
 
         // 预设按钮：省掉「接口地址填什么」这个最容易卡住人的问题
@@ -358,6 +360,8 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     baseUrlField.setText(preset.baseUrl)
                     modelField.setText(preset.model)
+                    presetNote.text = preset.note
+                    presetNote.visibility = if (preset.note.isBlank()) View.GONE else View.VISIBLE
                     Toast.makeText(
                         this@MainActivity,
                         "已填好${preset.name}的地址，下面把 key 粘进去就行",
@@ -368,6 +372,9 @@ class MainActivity : Activity() {
         }
         ownKeyPanel.addView(HorizontalScrollView(this).apply { addView(presetRow) })
         ownKeyPanel.addView(hint("↑ 先点一下你注册的那家，地址和模型会自动填好"))
+
+        presetNote = hint("").apply { visibility = View.GONE }
+        ownKeyPanel.addView(presetNote)
 
         apiKeyField = EditText(this).apply {
             hint = "把 API Key 粘贴到这里"
@@ -497,6 +504,13 @@ class MainActivity : Activity() {
         baseUrlField.setText(config.ai.baseUrl)
         apiKeyField.setText(config.ai.apiKey)
         modelField.setText(config.ai.model)
+
+        // 之前选过的那家如果有注意事项，重新打开时也要看得到
+        val preset = OpenAiCompatibleWriter.PRESETS.firstOrNull {
+            it.baseUrl == config.ai.baseUrl && it.note.isNotBlank()
+        }
+        presetNote.text = preset?.note.orEmpty()
+        presetNote.visibility = if (preset == null) View.GONE else View.VISIBLE
         relayUrlField.setText(config.ai.relayUrl)
         relayTokenField.setText(config.ai.relayToken)
 

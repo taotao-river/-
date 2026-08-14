@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
 
+from .providers import PROVIDERS
+
 Answer = Union[str, list[str]]
 
 
@@ -452,7 +454,11 @@ def _quote(text: str) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def to_yaml(result: WizardResult, reply_mode: str = "rules_then_ai") -> str:
+def to_yaml(
+    result: WizardResult,
+    reply_mode: str = "rules_then_ai",
+    provider: str = "doubao",
+) -> str:
     """渲染成 config.yaml。
 
     手写而不是 yaml.safe_dump：dump 会把注释全丢掉，而这份文件的读者
@@ -525,9 +531,22 @@ def to_yaml(result: WizardResult, reply_mode: str = "rules_then_ai") -> str:
     lines.append("  type: text                # text / llm / none")
     lines.append(f"  text: {_quote(result.fallback_text)}")
     lines.append("")
+    lines.append("# 只有 reply_mode 是 ai 或 rules_then_ai + fallback.type=llm 时才用得上。")
     lines.append("llm:")
-    lines.append("  model: claude-opus-5")
-    lines.append("  effort: low               # 自动回复要低延迟，不需要深度推理")
+    lines.append(f"  provider: {provider}")
+
+    known = PROVIDERS.get(provider)
+    if known is not None:
+        lines.append(f"  # {known.name}")
+        lines.append(f"  # key 从环境变量读：export {known.api_key_env}=你的key")
+        if known.note:
+            lines.append(f"  # {known.note}")
+        lines.append(f"  model: {known.model}")
+    else:
+        lines.append("  # Claude，需要 export ANTHROPIC_API_KEY=...")
+        lines.append("  model: claude-opus-5")
+        lines.append("  effort: low             # 自动回复要低延迟，不需要深度推理")
+
     lines.append("  max_tokens: 300")
     lines.append("")
 
@@ -597,6 +616,51 @@ def _preview(result: WizardResult) -> None:
     print()
 
 
+def _ask_engine() -> tuple[str, str]:
+    """最后再问「用哪种方式回」和「接哪家模型」。
+
+    放在最后而不是开头：前面十道题答完，用户已经看到生成的话长什么样，
+    这时候他才有依据判断「这几句够不够用」。一上来就问「你要不要接 AI」，
+    对一个还不知道差别在哪的人来说是没法回答的。
+    """
+    print("─" * 56)
+    print("  最后两个问题")
+    print("─" * 56)
+    print()
+    print("  怎么回消息？")
+    print("    1. 就用上面这几句（不联网、不花钱、不用注册）")
+    print("    2. 让 AI 照着这个语气现写（像真人，需要一个 key）")
+
+    mode = "rules"
+    while True:
+        raw = input("  > ").strip()
+        if raw in ("1", ""):
+            return mode, "doubao"
+        if raw == "2":
+            break
+        print("  输 1 或 2")
+
+    print()
+    print("  接哪家的模型？")
+    ids = list(PROVIDERS)
+    for i, pid in enumerate(ids, start=1):
+        marker = "（推荐，聊天的中文语气最自然）" if pid == "doubao" else ""
+        print(f"    {i}. {PROVIDERS[pid].name}{marker}")
+    print(f"    {len(ids) + 1}. Claude（国内不好注册，谨慎选）")
+
+    while True:
+        raw = input("  > ").strip()
+        if raw == "":
+            return "ai", "doubao"
+        if raw.isdigit():
+            n = int(raw)
+            if 1 <= n <= len(ids):
+                return "ai", ids[n - 1]
+            if n == len(ids) + 1:
+                return "ai", "anthropic"
+        print(f"  输 1 到 {len(ids) + 1}")
+
+
 def run(config_path: Optional[str] = None) -> int:
     target = Path(config_path or "core/config.yaml")
 
@@ -622,19 +686,33 @@ def run(config_path: Optional[str] = None) -> int:
     if confirm in ("n", "no", "否"):
         return run(config_path)
 
+    reply_mode, provider = _ask_engine()
+
     if target.exists():
         backup = target.with_suffix(target.suffix + ".bak")
         shutil.copy2(target, backup)
         print(f"  原来的配置备份到了 {backup}")
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(to_yaml(result), encoding="utf-8")
+    target.write_text(
+        to_yaml(result, reply_mode=reply_mode, provider=provider), encoding="utf-8"
+    )
 
     print()
     print(f"  ✅ 写好了：{target}")
     print()
     print("  下一步：")
-    print("    python3 -m core.preview      # 打字试试，不会真的发出去")
+    if reply_mode != "rules":
+        known = PROVIDERS.get(provider)
+        if known is not None:
+            print(f"    1) 去 {known.name} 拿一个 API Key，然后：")
+            print(f"       export {known.api_key_env}=你的key")
+            print("    2) python3 -m core.preview   # 打字试试，不会真的发出去")
+        else:
+            print("    1) export ANTHROPIC_API_KEY=你的key")
+            print("    2) python3 -m core.preview   # 打字试试，不会真的发出去")
+    else:
+        print("    python3 -m core.preview      # 打字试试，不会真的发出去")
     print()
     print("  觉得哪句话不对，直接用文本编辑器改上面那个文件，")
     print("  或者重跑 python3 -m core.wizard 重新答一遍。")
