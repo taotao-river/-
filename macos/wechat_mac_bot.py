@@ -98,12 +98,44 @@ end run
 
 _SEND = """
 on run argv
-    set replyText to item 1 of argv
+    set targetName to item 1 of argv
+    set replyText to item 2 of argv
     tell application "System Events"
         tell process "WeChat"
             set frontmost to true
-            delay 0.2
-            -- 焦点给输入框后直接键入，比定位 text area 更耐版本变化
+            delay 0.3
+
+            -- 发之前必须重新选中目标会话。
+            -- 读消息和发送之间隔着 3-12 秒的随机延迟，这期间用户完全
+            -- 可能切到别的聊天；直接 keystroke 会把话打进别人的对话框
+            -- 然后发出去。宁可不发，也不能发错人。
+            set found to false
+            try
+                set convRows to rows of table 1 of scroll area 1 of splitter group 1 of window 1
+                repeat with r in convRows
+                    try
+                        set labels to value of static texts of UI element 1 of r
+                        if (item 1 of labels) is targetName then
+                            select r
+                            delay 0.5
+                            set found to true
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+            end try
+            if not found then
+                return "ERR:发送前找不到会话「" & targetName & "」，已放弃，没有发出任何内容"
+            end if
+
+            -- 尽量把焦点明确放进输入框。找不到就退回直接键入——
+            -- 但此时会话已经确认选中，风险可控。
+            try
+                set inputArea to text area 1 of scroll area 2 of splitter group 2 of splitter group 1 of window 1
+                set focused of inputArea to true
+                delay 0.2
+            end try
+
             keystroke replyText
             delay 0.3
             key code 36  -- Return
@@ -111,6 +143,105 @@ on run argv
     end tell
     return "OK"
 end run
+"""
+
+# 诊断用：把微信的辅助功能树打出来。
+# 选择器随微信版本变化，出问题时靠这个定位，而不是靠猜。
+_DOCTOR = """
+tell application "System Events"
+    if not (exists process "WeChat") then return "微信没在运行。先打开并登录 macOS 版微信。"
+    tell process "WeChat"
+        set out to "微信进程: 在运行" & return
+        set out to out & "窗口数: " & (count of windows) & return
+        if (count of windows) = 0 then
+            return out & return & "微信在运行但没有打开的窗口——点一下 Dock 里的微信图标把主窗口调出来。"
+        end if
+
+        try
+            set out to out & "窗口1 名称: " & (name of window 1) & return
+        end try
+
+        set out to out & return & "=== 第 1 层：窗口1 的直接子元素 ===" & return
+        try
+            repeat with e in UI elements of window 1
+                set entryLine to "  " & (class of e as text)
+                try
+                    set entryLine to entryLine & "  desc=" & (description of e)
+                end try
+                set out to out & entryLine & return
+            end repeat
+        on error errMsg
+            set out to out & "  读不到：" & errMsg & return
+        end try
+
+        set out to out & return & "=== 第 2 层：splitter group 1 里有什么 ===" & return
+        try
+            repeat with e in UI elements of splitter group 1 of window 1
+                set entryLine to "  " & (class of e as text)
+                try
+                    set entryLine to entryLine & "  desc=" & (description of e)
+                end try
+                set out to out & entryLine & return
+            end repeat
+        on error errMsg
+            set out to out & "  没有 splitter group 1：" & errMsg & return
+        end try
+
+        set out to out & return & "=== 关键路径逐段探测 ===" & return
+
+        try
+            set sg to splitter group 1 of window 1
+            set out to out & "  [OK] splitter group 1" & return
+        on error
+            set out to out & "  [X ] splitter group 1  <- 断在这里" & return
+            return out
+        end try
+
+        try
+            set sa to scroll area 1 of sg
+            set out to out & "  [OK] scroll area 1" & return
+        on error
+            set out to out & "  [X ] scroll area 1  <- 断在这里" & return
+            return out
+        end try
+
+        try
+            set tb to table 1 of sa
+            set out to out & "  [OK] table 1（会话列表）" & return
+        on error
+            set out to out & "  [X ] table 1  <- 断在这里" & return
+            return out
+        end try
+
+        try
+            set rowCount to count of rows of tb
+            set out to out & "  [OK] 会话列表有 " & rowCount & " 行" & return
+        on error errMsg
+            set out to out & "  [X ] 读不到行：" & errMsg & return
+            return out
+        end try
+
+        set out to out & return & "=== 前 3 个会话读出来长什么样 ===" & return
+        try
+            set n to 0
+            repeat with r in rows of tb
+                set n to n + 1
+                if n > 3 then exit repeat
+                try
+                    set labels to value of static texts of UI element 1 of r
+                    set out to out & "  会话 " & n & ": " & (item 1 of labels) & return
+                    try
+                        set out to out & "         desc=" & (description of r) & return
+                    end try
+                on error errMsg
+                    set out to out & "  会话 " & n & " 读不出名字：" & errMsg & return
+                end try
+            end repeat
+        end try
+
+        return out
+    end tell
+end tell
 """
 
 
@@ -203,18 +334,65 @@ def tick(engine: EngineClient, dry_run: bool) -> None:
 
         logger.info("  等待 %.1fs 后回复: %s", delay, reply)
         time.sleep(delay)
-        result = run_applescript(_SEND, reply)
+        # 把会话名一起传进去：发之前要重新选中，否则等待期间用户
+        # 切走了就会发错人
+        result = run_applescript(_SEND, name, reply)
         if result.startswith("ERR:"):
             logger.error("  发送失败：%s", result[4:])
         else:
             logger.info("  已发送")
 
 
+def doctor() -> int:
+    """把微信的界面结构打出来。
+
+    这个方案靠读辅助功能树定位控件，而那个树的结构随微信版本变化。
+    出问题时不该让用户对着「找不到会话列表」干瞪眼——把实际看到的
+    结构打出来，才有得改。
+    """
+    print()
+    print("=" * 56)
+    print("  微信界面结构诊断")
+    print("=" * 56)
+    print()
+    print("  如果下面有 [X ]，把从这行往下的全部内容复制给帮你配置的人。")
+    print()
+
+    output = run_applescript(_DOCTOR)
+    if output.startswith("ERR:"):
+        print(f"  执行失败：{output[4:]}")
+        print()
+        print("  最常见的原因是没授权：")
+        print("    系统设置 → 隐私与安全性 → 辅助功能 → 勾选「终端」")
+        print("  勾了之后要把终端完全退出（⌘Q）再重开，授权才生效。")
+        return 1
+
+    print(output)
+    print()
+    if "[X ]" in output:
+        print("  ⚠️ 上面有断掉的地方，说明你的微信版本和代码里的选择器对不上。")
+        print("     把这整段输出发给帮你配置的人，改几行就能适配。")
+        return 1
+
+    print("  ✅ 界面结构对得上，可以继续跑 --dry-run 了。")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="macOS 微信自动回复")
     parser.add_argument("--interval", type=float, default=15.0)
     parser.add_argument("--dry-run", action="store_true", help="只打印不发送")
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="打印微信界面结构，用来排查「读不到会话」这类问题",
+    )
+    parser.add_argument("--once", action="store_true", help="只扫一轮就退出")
     args = parser.parse_args()
+
+    # 诊断不需要连规则服务，也不需要 token
+    if args.doctor:
+        return doctor()
 
     token = os.environ.get("WXAUTO_TOKEN", "")
     if not token:
@@ -228,10 +406,17 @@ def main() -> int:
     if account:
         logger.info("驱动的微信号: %s", account)
     logger.info("启动，每 %.0fs 扫一次%s", args.interval, "（DRY-RUN）" if args.dry_run else "")
+    if args.dry_run:
+        # 说清楚 dry-run 到底「干」在哪：它不发消息，但读消息这件事
+        # 本身要靠点开会话，所以未读会被标成已读。这一点不提前讲，
+        # 用户会以为自己被偷看了消息。
+        logger.info("DRY-RUN：不会发出任何消息。但读取需要点开会话，未读会被标为已读。")
 
     try:
         while True:
             tick(engine, args.dry_run)
+            if args.once:
+                break
             time.sleep(args.interval)
     except KeyboardInterrupt:
         logger.info("收到中断，退出")
