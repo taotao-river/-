@@ -40,11 +40,15 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: 编译 debug APK
+      - name: 跑引擎单测
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew testDebugUnitTest --no-daemon --stacktrace
+
+      - name: 编译 debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: 重命名产物
         run: |
@@ -54,6 +58,13 @@ jobs:
           ls -lh dist/
 
       # 每次构建都能在 Actions 页面下载到
+      - name: 单测失败时上传报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 单测报告
+          path: android/app/build/reports/tests/
+
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:

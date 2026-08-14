@@ -31,4 +31,7 @@ android {
 
 dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
+
+    // 引擎单测（纯 JVM，不需要设备）
+    testImplementation("junit:junit:4.13.2")
 }

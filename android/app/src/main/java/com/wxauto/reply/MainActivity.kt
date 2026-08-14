@@ -2,98 +2,306 @@ package com.wxauto.reply
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
 import android.provider.Settings
-import android.text.InputType
+import android.text.TextUtils
+import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import com.wxauto.reply.engine.EngineConfig
+import com.wxauto.reply.engine.GroupPolicy
+import com.wxauto.reply.engine.Rule
+import com.wxauto.reply.engine.Storage
 
 /**
- * 极简配置页：填规则服务地址和 token，然后跳去系统授权。
- * 真正的规则都在服务端 YAML 里，这里不做规则编辑。
+ * 唯一的界面。目标是「装完打开、拨一下开关就能用」，
+ * 所以默认值都填好了，用户不改任何东西也能正常工作。
  */
 class MainActivity : Activity() {
 
+    private lateinit var masterSwitch: Switch
+    private lateinit var permissionStatus: TextView
+    private lateinit var groupPolicyGroup: RadioGroup
+    private lateinit var fallbackField: EditText
+    private lateinit var blockContactsField: EditText
+    private lateinit var rulesContainer: LinearLayout
+
+    private var groupNeverId = View.generateViewId()
+    private var groupAtMeId = View.generateViewId()
+    private var groupAlwaysId = View.generateViewId()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContentView(buildUi())
+        loadIntoUi(Storage.loadConfig(this))
+    }
 
-        val prefs = getSharedPreferences(WeChatNotificationService.PREFS, MODE_PRIVATE)
+    override fun onResume() {
+        super.onResume()
+        // 从系统设置页返回时刷新授权状态
+        refreshPermissionStatus()
+        masterSwitch.isChecked = Storage.loadConfig(this).enabled
+    }
 
-        val urlField = EditText(this).apply {
-            hint = "规则服务地址，如 http://192.168.1.10:8848"
-            setText(prefs.getString(WeChatNotificationService.KEY_URL, WeChatNotificationService.DEFAULT_URL))
-            inputType = InputType.TYPE_TEXT_VARIATION_URI
+    // ------------------------------------------------------------------ 界面
+
+    private fun buildUi(): View {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(28), dp(20), dp(28))
         }
 
-        val tokenField = EditText(this).apply {
-            hint = "WXAUTO_TOKEN"
-            setText(prefs.getString(WeChatNotificationService.KEY_TOKEN, ""))
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
+        root.addView(title("微信自动回复"))
 
-        val accountField = EditText(this).apply {
-            hint = "微信号标识（可留空），如「工作号」"
-            setText(prefs.getString(WeChatNotificationService.KEY_ACCOUNT, ""))
-            inputType = InputType.TYPE_CLASS_TEXT
-        }
-
-        val save = Button(this).apply {
-            text = "保存"
-            setOnClickListener {
-                prefs.edit()
-                    .putString(WeChatNotificationService.KEY_URL, urlField.text.toString().trim())
-                    .putString(WeChatNotificationService.KEY_TOKEN, tokenField.text.toString().trim())
-                    .putString(WeChatNotificationService.KEY_ACCOUNT, accountField.text.toString().trim())
-                    .apply()
-                // 通知监听服务在 onCreate 读配置，改完要重开一次才生效
+        // ---- 总开关 ----
+        masterSwitch = Switch(this).apply {
+            text = "  自动回复"
+            textSize = 20f
+            setTypeface(null, Typeface.BOLD)
+            setPadding(dp(12), dp(16), dp(12), dp(16))
+            setOnCheckedChangeListener { _, checked ->
+                Storage.setEnabled(this@MainActivity, checked)
                 Toast.makeText(
                     this@MainActivity,
-                    "已保存。请到「通知使用权」里关掉再打开本应用，让新配置生效。",
-                    Toast.LENGTH_LONG,
+                    if (checked) "自动回复已开启" else "自动回复已关闭",
+                    Toast.LENGTH_SHORT,
                 ).show()
+                refreshPermissionStatus()
             }
         }
+        root.addView(masterSwitch)
 
-        val notifPerm = Button(this).apply {
-            text = "① 授予通知使用权（主力方案，必需）"
+        permissionStatus = TextView(this).apply {
+            setPadding(dp(12), 0, dp(12), dp(12))
+        }
+        root.addView(permissionStatus)
+
+        root.addView(Button(this).apply {
+            text = "授予通知使用权（必须）"
             setOnClickListener {
                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             }
-        }
-
-        val a11yPerm = Button(this).apply {
-            text = "② 授予无障碍权限（兜底方案，可选）"
-            setOnClickListener {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-        }
-
-        val notice = TextView(this).apply {
-            text = """
-                说明：
-                • 主力方案靠微信通知里的「回复」按钮，不需要无障碍权限。
-                • 只有当通知没有回复入口、或会话开了免打扰时，才需要开②。
-                • 所有规则、冷却、敏感词都在服务端配置，本 App 不存消息内容。
-                • 微信号标识：跑多个微信号时用来区分额度。两个不同的号
-                  各跑一端就填不同的值（或都留空）；同一个号在手机和电脑
-                  同时登录，则两端填相同的值，避免对方收到两条重复回复。
-            """.trimIndent()
-            setPadding(0, 32, 0, 0)
-        }
-
-        setContentView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 64, 48, 48)
-            addView(urlField)
-            addView(tokenField)
-            addView(accountField)
-            addView(save)
-            addView(notifPerm)
-            addView(a11yPerm)
-            addView(notice)
         })
+
+        root.addView(hint("在打开的页面里找到「微信自动回复」并打开。不给这个权限，程序看不到微信消息。"))
+
+        root.addView(divider())
+
+        // ---- 群聊 ----
+        root.addView(section("群聊消息"))
+        groupPolicyGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+            addView(RadioButton(context).apply { id = groupNeverId; text = "不回群消息（推荐）" })
+            addView(RadioButton(context).apply { id = groupAtMeId; text = "只在别人 @ 我时回" })
+            addView(RadioButton(context).apply { id = groupAlwaysId; text = "群里任何消息都回（容易刷屏）" })
+        }
+        root.addView(groupPolicyGroup)
+
+        root.addView(divider())
+
+        // ---- 规则 ----
+        root.addView(section("收到这些词，就回这句话"))
+        rulesContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(rulesContainer)
+
+        root.addView(Button(this).apply {
+            text = "＋ 再加一条"
+            setOnClickListener { rulesContainer.addView(ruleRow(Rule(name = "规则", replies = listOf(""))))}
+        })
+
+        root.addView(divider())
+
+        // ---- 兜底 ----
+        root.addView(section("其他消息统一回"))
+        fallbackField = EditText(this).apply {
+            hint = "留空表示不回"
+        }
+        root.addView(fallbackField)
+        root.addView(hint("上面的词都没匹配上时，回这一句。"))
+
+        root.addView(divider())
+
+        // ---- 不回复名单 ----
+        root.addView(section("这些人永远不自动回"))
+        blockContactsField = EditText(this).apply {
+            hint = "多个人用逗号隔开，例如：老板，妈妈"
+        }
+        root.addView(blockContactsField)
+
+        root.addView(divider())
+
+        root.addView(Button(this).apply {
+            text = "保存设置"
+            setOnClickListener { saveFromUi() }
+        })
+
+        root.addView(hint(
+            "小提示：下拉通知栏 → 点编辑（铅笔图标）→ 把「微信自动回复」拖进快捷开关，" +
+                "以后下拉一点就能开关，不用每次打开这个 App。"
+        ))
+
+        root.addView(hint(
+            "安全说明：遇到含「转账、红包、验证码、借钱」等字样的消息，" +
+                "程序一律不自动回，交给你本人处理。这条改不了。\n\n" +
+                "每条回复末尾会带「（自动回复）」，让对方知道不是你本人在回。"
+        ))
+
+        return ScrollView(this).apply {
+            addView(root, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+    }
+
+    /** 一条规则的编辑行：关键词 + 回复内容 + 删除按钮。 */
+    private fun ruleRow(rule: Rule): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, dp(8))
+        }
+
+        val keywords = EditText(this).apply {
+            hint = "关键词，多个用逗号隔开，例如：在吗，在么"
+            setText(rule.keywords.joinToString("，"))
+            tag = TAG_KEYWORDS
+        }
+        val reply = EditText(this).apply {
+            hint = "回复内容"
+            setText(rule.replies.firstOrNull().orEmpty())
+            tag = TAG_REPLY
+        }
+        val remove = Button(this).apply {
+            text = "删除这条"
+            setOnClickListener { rulesContainer.removeView(row) }
+        }
+
+        row.addView(keywords)
+        row.addView(reply)
+        row.addView(remove)
+        return row
+    }
+
+    // ------------------------------------------------------------------ 读写
+
+    private fun loadIntoUi(config: EngineConfig) {
+        masterSwitch.isChecked = config.enabled
+        groupPolicyGroup.check(
+            when (config.groupPolicy) {
+                GroupPolicy.NEVER -> groupNeverId
+                GroupPolicy.ONLY_AT_ME -> groupAtMeId
+                GroupPolicy.ALWAYS -> groupAlwaysId
+            }
+        )
+        fallbackField.setText(config.fallbackText)
+        blockContactsField.setText(config.blockContacts.joinToString("，"))
+
+        rulesContainer.removeAllViews()
+        val rules = config.rules.ifEmpty { listOf(Rule(name = "规则", replies = listOf(""))) }
+        rules.forEach { rulesContainer.addView(ruleRow(it)) }
+    }
+
+    private fun saveFromUi() {
+        val rules = ArrayList<Rule>()
+        for (i in 0 until rulesContainer.childCount) {
+            val row = rulesContainer.getChildAt(i) as? ViewGroup ?: continue
+            val keywords = (row.findViewWithTag<EditText>(TAG_KEYWORDS))?.text?.toString().orEmpty()
+            val reply = (row.findViewWithTag<EditText>(TAG_REPLY))?.text?.toString().orEmpty()
+            val words = splitList(keywords)
+            if (words.isEmpty() || reply.isBlank()) continue
+            rules += Rule(
+                name = words.first(),
+                keywords = words,
+                replies = listOf(reply.trim()),
+            )
+        }
+
+        val policy = when (groupPolicyGroup.checkedRadioButtonId) {
+            groupAtMeId -> GroupPolicy.ONLY_AT_ME
+            groupAlwaysId -> GroupPolicy.ALWAYS
+            else -> GroupPolicy.NEVER
+        }
+
+        val updated = Storage.loadConfig(this).copy(
+            enabled = masterSwitch.isChecked,
+            groupPolicy = policy,
+            rules = rules,
+            fallbackText = fallbackField.text.toString().trim(),
+            blockContacts = splitList(blockContactsField.text.toString()),
+        )
+        Storage.saveConfig(this, updated)
+        Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 中英文逗号都当分隔符——用户不该被要求分清全角半角。 */
+    private fun splitList(raw: String): List<String> =
+        raw.split(",", "，", "、")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+    // ------------------------------------------------------------------ 状态
+
+    private fun refreshPermissionStatus() {
+        val granted = isNotificationAccessGranted()
+        val enabled = Storage.loadConfig(this).enabled
+
+        val (text, color) = when {
+            !granted -> "⚠️ 还没授予通知使用权，现在不会自动回复" to Color.parseColor("#D32F2F")
+            !enabled -> "已授权。开关打开后开始工作。" to Color.parseColor("#757575")
+            else -> "✅ 正在工作中" to Color.parseColor("#2E7D32")
+        }
+        permissionStatus.text = text
+        permissionStatus.setTextColor(color)
+    }
+
+    private fun isNotificationAccessGranted(): Boolean {
+        val flat = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+        if (TextUtils.isEmpty(flat)) return false
+        return flat.split(":").any { it.contains(packageName) }
+    }
+
+    // ------------------------------------------------------------------ 小工具
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun title(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 24f
+        setTypeface(null, Typeface.BOLD)
+        setPadding(dp(12), 0, dp(12), dp(16))
+    }
+
+    private fun section(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 17f
+        setTypeface(null, Typeface.BOLD)
+        setPadding(dp(12), dp(8), dp(12), dp(4))
+    }
+
+    private fun hint(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 13f
+        setTextColor(Color.parseColor("#757575"))
+        setPadding(dp(12), dp(4), dp(12), dp(12))
+    }
+
+    private fun divider() = View(this).apply {
+        setBackgroundColor(Color.parseColor("#E0E0E0"))
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
+        ).apply { setMargins(0, dp(16), 0, dp(16)) }
+    }
+
+    companion object {
+        private const val TAG_KEYWORDS = "kw"
+        private const val TAG_REPLY = "rp"
     }
 }

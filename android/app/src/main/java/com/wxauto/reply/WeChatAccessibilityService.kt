@@ -5,6 +5,9 @@ import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.wxauto.reply.engine.Message
+import com.wxauto.reply.engine.ReplyEngine
+import com.wxauto.reply.engine.Storage
 import java.util.concurrent.Executors
 
 /**
@@ -22,24 +25,14 @@ import java.util.concurrent.Executors
 class WeChatAccessibilityService : AccessibilityService() {
 
     private val executor = Executors.newSingleThreadExecutor()
-    private lateinit var engine: ReplyEngineClient
+    private lateinit var engine: ReplyEngine
 
     /** 记住上次处理过的消息，避免同一条被界面刷新触发多次。 */
     private var lastHandled: String? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        val prefs = getSharedPreferences(
-            WeChatNotificationService.PREFS, MODE_PRIVATE
-        )
-        engine = ReplyEngineClient(
-            baseUrl = prefs.getString(
-                WeChatNotificationService.KEY_URL,
-                WeChatNotificationService.DEFAULT_URL
-            )!!,
-            token = prefs.getString(WeChatNotificationService.KEY_TOKEN, "")!!,
-            account = prefs.getString(WeChatNotificationService.KEY_ACCOUNT, "")!!,
-        )
+        engine = ReplyEngine(Storage.stateStore(this))
         Log.i(TAG, "无障碍服务已连接")
     }
 
@@ -70,12 +63,15 @@ class WeChatAccessibilityService : AccessibilityService() {
     private fun handle(chatName: String, text: String) {
         val isGroup = Regex("""\(\d+\)$""").containsMatchIn(chatName)
         val decision = engine.decide(
-            chatId = "android-a11y:$chatName",
-            chatName = chatName.replace(Regex("""\(\d+\)$"""), ""),
-            text = text,
-            senderName = chatName,
-            isGroup = isGroup,
-            mentionedMe = text.contains("@"),
+            Storage.loadConfig(this),
+            Message(
+                chatId = chatName,
+                chatName = chatName,
+                text = text,
+                senderName = chatName,
+                isGroup = isGroup,
+                mentionedMe = text.contains("@"),
+            ),
         )
 
         if (!decision.shouldReply || decision.text == null) {
