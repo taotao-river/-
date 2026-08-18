@@ -26,7 +26,7 @@ class SetupWizardTest {
             "progress" to listOf("rough"),
             "stranger" to listOf("polite"),
             "greeting" to listOf(""),
-            "never" to listOf(""),
+            "never" to emptyList(),
         )
         overrides.forEach { (k, v) -> base[k] = v }
         return base
@@ -69,7 +69,8 @@ class SetupWizardTest {
         assertEquals(
             listOf(
                 "who", "busy", "style", "greeting",
-                "appointment", "progress", "stranger", "emoji", "never", "only_for",
+                "appointment", "progress", "stranger", "emoji",
+                "night", "never", "only_for",
             ),
             SetupWizard.QUESTIONS.map { it.id },
         )
@@ -201,19 +202,45 @@ class SetupWizardTest {
     }
 
     @Test
-    fun boundariesAcceptAnySeparator() {
-        val result = SetupWizard.build(
-            answers("never" to listOf("不谈价格，不评价别人、不帮忙转发\n不借钱"))
-        )
-        assertEquals(
-            listOf("不谈价格", "不评价别人", "不帮忙转发", "不借钱"),
-            result.persona.boundaries,
-        )
+    fun boundariesComeFromCheckboxes() {
+        // 原来这题是个空框，让人对着它想「有什么绝对不能答应」。
+        // 那是最难答的一种题，多数人直接跳过，于是这一段永远是空的。
+        val result = SetupWizard.build(answers("never" to listOf("money", "favor")))
+        assertEquals(2, result.persona.boundaries.size)
+        assertTrue(result.persona.boundaries.any { it.contains("价格") })
+        assertTrue(result.persona.boundaries.any { it.contains("投票") })
     }
 
     @Test
-    fun blankBoundariesStayEmpty() {
-        assertTrue(SetupWizard.build(answers("never" to listOf("   "))).persona.boundaries.isEmpty())
+    fun nightChoiceControlsActiveHours() {
+        // 深夜自动回复本身就是可疑信号，所以这题得问，而且要好答
+        assertEquals(9 * 60 to 23 * 60, SetupWizard.build(answers("night" to listOf("day"))).activeHours)
+        assertEquals(9 * 60 to 18 * 60, SetupWizard.build(answers("night" to listOf("work"))).activeHours)
+        assertEquals(-1 to -1, SetupWizard.build(answers("night" to listOf("always"))).activeHours)
+    }
+
+    @Test
+    fun activeHoursReachTheConfig() {
+        val config = SetupWizard.applyTo(
+            EngineConfig(enabled = true),
+            SetupWizard.build(answers("night" to listOf("work"))),
+        )
+        assertEquals(9 * 60, config.activeFromMinute)
+        assertEquals(18 * 60, config.activeToMinute)
+    }
+
+    @Test
+    fun clientMakesThePlaybookMoreCareful() {
+        // 选了客户、甲方说明回错的代价高，这题就该真的改变行为
+        val withClient = SetupWizard.build(answers("who" to listOf("client")))
+        val without = SetupWizard.build(answers("who" to listOf("friend")))
+        assertTrue(withClient.persona.playbook.contains("报价"))
+        assertFalse(without.persona.playbook.contains("报价"))
+    }
+
+    @Test
+    fun noBoundariesCheckedStaysEmpty() {
+        assertTrue(SetupWizard.build(answers("never" to emptyList())).persona.boundaries.isEmpty())
     }
 
     @Test
@@ -291,13 +318,13 @@ class SetupWizardTest {
             answers(
                 "style" to listOf("brief"),
                 "appointment" to listOf("refuse"),
-                "never" to listOf("不谈价格"),
+                "never" to listOf("money"),
             )
         )
         val prompt = buildSystemPrompt(result.persona)
         assertTrue(prompt.contains("能少说就少说"))
         assertTrue(prompt.contains("最近排不开"))
-        assertTrue(prompt.contains("不谈价格"))
+        assertTrue(prompt.contains("价格"))
         // 内置边界不受问答影响
         assertTrue(prompt.contains("不答应任何转账"))
     }

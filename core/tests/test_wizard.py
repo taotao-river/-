@@ -31,7 +31,7 @@ def answers(**overrides):
         "progress": "rough",
         "stranger": "polite",
         "greeting": "",
-        "never": "",
+        "never": [],
     }
     base.update(overrides)
     return base
@@ -74,6 +74,7 @@ def test_both_implementations_ask_the_same_questions():
         "progress",
         "stranger",
         "emoji",
+        "night",
         "never",
         "only_for",
     ]
@@ -181,13 +182,48 @@ def test_appointment_choice_changes_both_playbook_and_examples():
     assert "日程" in hold.examples[1]["me"]
 
 
-def test_boundaries_accept_any_separator():
-    result = build_result(answers(never="不谈价格，不评价别人、不帮忙转发\n不借钱"))
-    assert result.boundaries == ["不谈价格", "不评价别人", "不帮忙转发", "不借钱"]
+def test_boundaries_come_from_checkboxes():
+    """原来这题是个空框，让人对着它想「有什么绝对不能答应」。
+
+    那是最难答的一种题，多数人直接跳过，于是这一段永远是空的。
+    改成勾选之后，答案是常见的那几条，勾一下就有。
+    """
+    result = build_result(answers(never=["money", "favor"]))
+    assert any("价格" in b for b in result.boundaries)
+    assert any("投票" in b for b in result.boundaries)
+    assert len(result.boundaries) == 2
 
 
-def test_blank_boundaries_stay_empty():
-    assert build_result(answers(never="   ")).boundaries == []
+def test_no_boundaries_checked_stays_empty():
+    assert build_result(answers(never=[])).boundaries == []
+
+
+# ------------------------------------------------------------ 几点回
+
+
+def test_night_choice_controls_active_hours():
+    """深夜自动回复本身就是可疑信号，所以这题得问，而且要好答。"""
+    assert build_result(answers(night="day")).active_hours == ["09:00-23:00"]
+    assert build_result(answers(night="work")).active_hours == ["09:00-18:00"]
+    assert build_result(answers(night="always")).active_hours == []
+
+
+def test_active_hours_reach_the_config():
+    for night, expected in (("day", 1), ("work", 1), ("always", 0)):
+        config = build_config(yaml.safe_load(to_yaml(build_result(answers(night=night)))))
+        assert len(config.active_hours) == expected, night
+
+
+# ------------------------------------------------------------ 谁在发消息
+
+
+def test_client_makes_the_playbook_more_careful():
+    """选了客户、甲方说明回错的代价高，这题就该真的改变行为。"""
+    with_client = build_result(answers(who=["client"]))
+    without = build_result(answers(who=["friend"]))
+    assert "不表态" in with_client.playbook
+    assert "报价" in with_client.playbook
+    assert "报价" not in without.playbook
 
 
 def test_who_appears_in_identity():

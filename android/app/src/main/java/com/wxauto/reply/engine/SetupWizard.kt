@@ -43,6 +43,8 @@ data class WizardResult(
      * 而熟人不会举报你。技术上的限流再怎么做，也不如「只对不会举报你的人开」。
      */
     val allowContacts: List<String> = emptyList(),
+    /** 自动回复时段，距零点的分钟数。(-1, -1) = 全天。 */
+    val activeHours: Pair<Int, Int> = 9 * 60 to 23 * 60,
 )
 
 object SetupWizard {
@@ -136,12 +138,27 @@ object SetupWizard {
             ),
         ),
         WizardQuestion(
+            id = "night",
+            prompt = "晚上 11 点有人给你发消息，你希望它怎么办？",
+            kind = QuestionKind.SINGLE,
+            options = listOf(
+                WizardOption("day", "别回，等我第二天自己看"),
+                WizardOption("always", "照回，我本来也常半夜回消息"),
+                WizardOption("work", "只在白天上班时间回（9 点到 6 点）"),
+            ),
+        ),
+        WizardQuestion(
             id = "never",
             prompt = "有什么是绝对不能替你答应的？",
-            kind = QuestionKind.TEXT,
-            hint = "一行一个，或者用逗号隔开。可以留空",
-            optional = true,
-            placeholder = "例如：不谈价格、不评价别人、不答应帮忙转发",
+            kind = QuestionKind.MULTI,
+            hint = "可以多选，也可以一个都不选",
+            options = listOf(
+                WizardOption("money", "不谈钱、不谈价格"),
+                WizardOption("gossip", "不评价别人、不聊八卦"),
+                WizardOption("favor", "不答应帮忙投票、点赞、转发"),
+                WizardOption("meet", "不答应任何见面、吃饭的邀约"),
+                WizardOption("work", "不对工作上的具体安排表态"),
+            ),
         ),
         WizardQuestion(
             id = "only_for",
@@ -279,6 +296,25 @@ object SetupWizard {
 
     // 回复长度上限直接从说话风格推断，不再单独问一题：
     // 选了「在」的人不会突然写三句话，问了也是多余的一道题。
+    // 勾选的边界 → 写进提示词的硬性要求。
+    // 原来这题是个空框，让人对着它想「有什么绝对不能答应」——
+    // 那是最难答的一种题，多数人会直接跳过，于是这一段永远是空的。
+    private val NEVER_LINE = linkedMapOf(
+        "money" to "不谈钱和价格，一律说等我本人聊",
+        "gossip" to "不评价任何第三方的人和公司",
+        "favor" to "不答应帮忙投票、点赞、转发这类请求",
+        "meet" to "不答应任何见面、吃饭的邀约",
+        "work" to "不对工作上的具体安排表态，说等我本人回",
+    )
+
+    // 几点回，单位是距零点的分钟数。-1 表示全天。
+    // 深夜自动回复本身就可疑，默认避开。
+    private val ACTIVE_HOURS = mapOf(
+        "day" to (9 * 60 to 23 * 60),
+        "always" to (-1 to -1),
+        "work" to (9 * 60 to 18 * 60),
+    )
+
     private val MAX_CHARS_BY_STYLE =
         mapOf("brief" to 20, "casual" to 30, "polite" to 40, "warm" to 45)
 
@@ -360,6 +396,10 @@ object SetupWizard {
             "看不懂对方在说什么，或者事情比较重要：直接说等我本人回你，" +
                 "不要硬猜着接话。",
         ).toMutableList().apply {
+            if ("client" in (answers["who"] ?: emptyList())) {
+                // 选了客户、甲方，说明回错的代价高，攻略要更保守
+                add("涉及工作、报价、交付时间的事：一律不表态，说等我本人回。")
+            }
             if ("unsure" in busyIds) {
                 // 用户自己说了「有些消息不知道怎么回」——那就把模型也调保守些，
                 // 拿不准时先拖住，别替他现编一个答案
@@ -370,7 +410,8 @@ object SetupWizard {
             }
         }.joinToString("\n")
 
-        val boundaries = splitList(answers["never"]?.firstOrNull().orEmpty())
+        val neverIds = answers["never"] ?: emptyList()
+        val boundaries = NEVER_LINE.filterKeys { it in neverIds }.values.toList()
 
         // ---- 示范语气 ----
         // 用户自己写的那句优先级最高：那是他真实的声音，
@@ -435,6 +476,7 @@ object SetupWizard {
             rules = rules,
             fallbackText = fallbackText,
             allowContacts = splitList(answers["only_for"]?.firstOrNull().orEmpty()),
+            activeHours = ACTIVE_HOURS[one("night", "day")] ?: ACTIVE_HOURS.getValue("day"),
         )
     }
 
@@ -444,6 +486,8 @@ object SetupWizard {
         rules = result.rules,
         fallbackText = result.fallbackText,
         allowContacts = result.allowContacts,
+        activeFromMinute = result.activeHours.first,
+        activeToMinute = result.activeHours.second,
     )
 
     /**

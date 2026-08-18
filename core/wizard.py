@@ -134,12 +134,27 @@ QUESTIONS: list[Question] = [
         ],
     ),
     Question(
+        id="night",
+        prompt="晚上 11 点有人给你发消息，你希望它怎么办？",
+        kind="single",
+        options=[
+            Option("day", "别回，等我第二天自己看"),
+            Option("always", "照回，我本来也常半夜回消息"),
+            Option("work", "只在白天上班时间回（9 点到 6 点）"),
+        ],
+    ),
+    Question(
         id="never",
         prompt="有什么是绝对不能替你答应的？",
-        kind="text",
-        hint="一行一个，或者用逗号隔开。直接回车跳过",
-        optional=True,
-        placeholder="例如：不谈价格、不评价别人、不答应帮忙转发",
+        kind="multi",
+        hint="可以多选，也可以一个都不选",
+        options=[
+            Option("money", "不谈钱、不谈价格"),
+            Option("gossip", "不评价别人、不聊八卦"),
+            Option("favor", "不答应帮忙投票、点赞、转发"),
+            Option("meet", "不答应任何见面、吃饭的邀约"),
+            Option("work", "不对工作上的具体安排表态"),
+        ],
     ),
     Question(
         id="only_for",
@@ -285,6 +300,24 @@ _BUSY_ORDER = ("work", "hands", "out", "later", "unsure")
 # 选了「在」的人不会突然写三句话，问了也是多余的一道题。
 _MAX_CHARS_BY_STYLE = {"brief": 20, "casual": 30, "polite": 40, "warm": 45}
 
+# 勾选的边界 → 写进提示词的硬性要求。
+# 原来这题是个空框，让人对着它想「有什么绝对不能答应」——
+# 那是最难答的一种题，多数人会直接跳过，于是这一段就永远是空的。
+_NEVER_LINE = {
+    "money": "不谈钱和价格，一律说等我本人聊",
+    "gossip": "不评价任何第三方的人和公司",
+    "favor": "不答应帮忙投票、点赞、转发这类请求",
+    "meet": "不答应任何见面、吃饭的邀约",
+    "work": "不对工作上的具体安排表态，说等我本人回",
+}
+
+# 几点回。深夜自动回复本身就可疑，默认避开。
+_ACTIVE_HOURS = {
+    "day": ["09:00-23:00"],
+    "always": [],
+    "work": ["09:00-18:00"],
+}
+
 # 表情和感叹号是两回事：有人爱发表情但从不用感叹号。
 # 之前把它们混成一个「用不用」的程度问题，是设计错误。
 _EMOJI_LINE = {
@@ -318,6 +351,9 @@ class WizardResult:
     examples: list[dict[str, str]]
     rules: list[dict[str, object]]
     fallback_text: str
+
+    active_hours: list[str] = field(default_factory=lambda: ["09:00-23:00"])
+    """只在这些时段自动回。空 = 全天。深夜自动回复本身就可疑，默认避开。"""
 
     allow_contacts: list[str] = field(default_factory=list)
     """只对这些人自动回复。空 = 对所有人。
@@ -408,6 +444,11 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
         "看不懂对方在说什么，或者事情比较重要：直接说等我本人回你，"
         "不要硬猜着接话。",
     ]
+    if "client" in who_ids:
+        # 选了客户、甲方，说明回错的代价高，攻略要更保守
+        playbook_lines.append(
+            "涉及工作、报价、交付时间的事：一律不表态，说等我本人回。"
+        )
     if "unsure" in busy_ids:
         # 用户自己说了「有些消息不知道怎么回」——那就把模型也调保守些，
         # 拿不准时先拖住，别替他现编一个答案
@@ -418,8 +459,9 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
     playbook = "\n".join(playbook_lines)
 
     # ---- 绝对不能答应的 ----
-    never = answers.get("never")
-    boundaries = _split_lines(str(never)) if isinstance(never, str) and never.strip() else []
+    never_raw = answers.get("never") or []
+    never_ids = never_raw if isinstance(never_raw, list) else [never_raw]
+    boundaries = [_NEVER_LINE[n] for n in _NEVER_LINE if n in never_ids]
 
     # ---- 示范语气 ----
     # 用户自己写的那句优先级最高：那是他真实的声音，
@@ -497,6 +539,7 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
         rules=rules,
         fallback_text=fallback_text,
         allow_contacts=allow_contacts,
+        active_hours=_ACTIVE_HOURS.get(_pick(answers, "night", "day"), _ACTIVE_HOURS["day"]),
     )
 
 
@@ -532,8 +575,11 @@ def to_yaml(
         "",
         'signature: "（自动回复）"      # 留个尾巴，让对方知道不是你本人在回',
         "",
-        "active_hours:",
-        '  - "09:00-23:00"           # 只在这个时段自动回，其余时间不回',
+        "# 只在这些时段自动回，其余时间收到消息也不回。",
+        "# 深夜自动回复本身就是个可疑信号，默认避开。留空 = 全天。",
+        "active_hours:"
+        + ("" if result.active_hours else " []"),
+        *[f'  - "{r}"' for r in result.active_hours],
         "",
         "scope:",
         "  reply_to_private: true",
