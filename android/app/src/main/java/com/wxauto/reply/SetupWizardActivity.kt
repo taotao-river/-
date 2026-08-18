@@ -236,6 +236,24 @@ class SetupWizardActivity : Activity() {
             })
         }
 
+        container.addView(spacer(dp(16)))
+
+        // 单独强调这一条：它比其他所有限流加起来都管用
+        container.addView(TextView(this).apply {
+            if (result.allowContacts.isEmpty()) {
+                text = "⚠️ 会对所有人自动回复。\n\n" +
+                    "真正可能导致封号的是「被人举报」，而熟人不会举报你。" +
+                    "建议点下面「重新答一遍」，在最后一题填三五个熟人，先跑几天。"
+                setTextColor(Color.parseColor("#EF6C00"))
+            } else {
+                text = "✅ 只对这几个人开：${result.allowContacts.joinToString("、")}\n" +
+                    "其他所有人一律不自动回复。"
+                setTextColor(Color.parseColor("#2E7D32"))
+            }
+            textSize = 14f
+            setPadding(dp(4), dp(8), dp(4), dp(8))
+        })
+
         container.addView(spacer(dp(20)))
 
         container.addView(TextView(this).apply {

@@ -77,6 +77,7 @@ def test_both_implementations_ask_the_same_questions():
         "stranger",
         "greeting",
         "never",
+        "only_for",
     ]
 
 
@@ -255,3 +256,43 @@ def test_ai_mode_config_passes_the_persona_requirement():
     text = to_yaml(build_result({}), reply_mode="ai")
     config = build_config(yaml.safe_load(text))
     assert config.persona.is_configured()
+
+
+# ------------------------------------------------------------------ 白名单
+
+
+def test_only_for_becomes_allow_contacts():
+    """「先只对哪几个人开」是最有效的防风控手段。
+
+    真正会出事的路径是被举报，而熟人不会举报你。
+    这一条藏在配置文件里的话，非技术用户根本用不到。
+    """
+    result = build_result(answers(only_for="小王，李雷、张三"))
+    assert result.allow_contacts == ["小王", "李雷", "张三"]
+
+    config = build_config(yaml.safe_load(to_yaml(result)))
+    assert config.scope.allow_contacts == ["小王", "李雷", "张三"]
+
+
+def test_blank_only_for_means_everyone():
+    result = build_result(answers(only_for=""))
+    assert result.allow_contacts == []
+    config = build_config(yaml.safe_load(to_yaml(result)))
+    assert config.scope.allow_contacts == []
+
+
+def test_whitelist_actually_blocks_outsiders():
+    """生成出来但引擎不认，等于白填。"""
+    from core.engine import ReplyEngine
+    from core.models import IncomingMessage
+
+    data = yaml.safe_load(to_yaml(build_result(answers(only_for="小王"))))
+    data["active_hours"] = []          # 时段不该干扰这条断言
+    engine = ReplyEngine(build_config(data))
+
+    inside = engine.decide(IncomingMessage(chat_id="小王", chat_name="小王", text="在吗"))
+    outside = engine.decide(IncomingMessage(chat_id="陌生人", chat_name="陌生人", text="在吗"))
+
+    assert inside.should_reply
+    assert not outside.should_reply
+    assert "白名单" in outside.reason

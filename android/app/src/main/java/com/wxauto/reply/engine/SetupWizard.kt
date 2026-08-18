@@ -36,6 +36,13 @@ data class WizardResult(
     val persona: PersonaConfig,
     val rules: List<Rule>,
     val fallbackText: String,
+    /**
+     * 只对这些人自动回复。空 = 对所有人。
+     *
+     * 这是所有防风控手段里最有效的一条：真正会出事的路径是被举报，
+     * 而熟人不会举报你。技术上的限流再怎么做，也不如「只对不会举报你的人开」。
+     */
+    val allowContacts: List<String> = emptyList(),
 )
 
 object SetupWizard {
@@ -141,6 +148,14 @@ object SetupWizard {
             hint = "一行一个，或者用逗号隔开。可以留空",
             optional = true,
             placeholder = "例如：不谈价格、不评价别人、不答应帮忙转发",
+        ),
+        WizardQuestion(
+            id = "only_for",
+            prompt = "先只对哪几个人开？",
+            kind = QuestionKind.TEXT,
+            hint = "填微信备注名，多个用逗号隔开。强烈建议先填三五个熟人",
+            optional = true,
+            placeholder = "留空 = 对所有人开（风险高很多）",
         ),
     )
 
@@ -389,6 +404,7 @@ object SetupWizard {
             ),
             rules = rules,
             fallbackText = fallbackText,
+            allowContacts = splitList(answers["only_for"]?.firstOrNull().orEmpty()),
         )
     }
 
@@ -397,6 +413,7 @@ object SetupWizard {
         persona = result.persona,
         rules = result.rules,
         fallbackText = result.fallbackText,
+        allowContacts = result.allowContacts,
     )
 
     /**

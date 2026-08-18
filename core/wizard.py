@@ -147,6 +147,14 @@ QUESTIONS: list[Question] = [
         optional=True,
         placeholder="例如：不谈价格、不评价别人、不答应帮忙转发",
     ),
+    Question(
+        id="only_for",
+        prompt="先只对哪几个人开？",
+        kind="text",
+        hint="填微信备注名，多个用逗号隔开。强烈建议先填三五个熟人",
+        optional=True,
+        placeholder="留空 = 对所有人开（风险高很多，见下面说明）",
+    ),
 ]
 
 
@@ -292,6 +300,13 @@ class WizardResult:
     rules: list[dict[str, object]]
     fallback_text: str
 
+    allow_contacts: list[str] = field(default_factory=list)
+    """只对这些人自动回复。空 = 对所有人。
+
+    这是所有防风控手段里最有效的一条：被举报是真正会出事的路径，
+    而熟人不会举报你。技术上的限流再怎么做，也不如「只对不会举报你的人开」。
+    """
+
 
 def _pick(answers: dict[str, Answer], qid: str, default: str) -> str:
     value = answers.get(qid)
@@ -430,6 +445,11 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
     else:
         fallback_text = f"{busy_text}，看到会尽快回你"
 
+    only_for = answers.get("only_for")
+    allow_contacts = (
+        _split_lines(str(only_for)) if isinstance(only_for, str) and only_for.strip() else []
+    )
+
     return WizardResult(
         identity=identity,
         tone=tone,
@@ -439,6 +459,7 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
         examples=examples,
         rules=rules,
         fallback_text=fallback_text,
+        allow_contacts=allow_contacts,
     )
 
 
@@ -481,6 +502,20 @@ def to_yaml(
         "  reply_to_private: true",
         "  reply_to_group: only_at_me",
         "  block_contacts: []        # 写在这里的人永远不自动回",
+    ]
+
+    if result.allow_contacts:
+        lines.append("  # 只对下面这些人自动回复，其他人一律不回。")
+        lines.append("  # 这是最有效的防风控手段——真正会出事的路径是被举报，")
+        lines.append("  # 而熟人不会举报你。想放开时把这几行删掉即可。")
+        lines.append("  allow_contacts:")
+        lines.extend(f"    - {_quote(name)}" for name in result.allow_contacts)
+    else:
+        lines.append("  # allow_contacts 非空时，只对名单里的人自动回复。")
+        lines.append("  # 强烈建议先填三五个熟人跑几天，确认没问题再放开。")
+        lines.append("  allow_contacts: []")
+
+    lines += [
         "",
         "limits:",
         "  per_chat_cooldown_seconds: 1800",
@@ -610,6 +645,16 @@ def _preview(result: WizardResult) -> None:
     print(f"  回复长度上限：{result.max_chars} 字")
     if result.boundaries:
         print("  绝对不答应：" + "、".join(result.boundaries))
+    print()
+
+    # 这一条单独强调：它比其他所有限流加起来都管用
+    if result.allow_contacts:
+        print("  ✅ 只对这几个人开：" + "、".join(result.allow_contacts))
+        print("     其他所有人一律不自动回复。")
+    else:
+        print("  ⚠️  会对所有人自动回复。")
+        print("     真正会出事的路径是被举报，而熟人不会举报你。")
+        print("     建议重答一遍，在最后一题填三五个熟人先跑几天。")
     print()
     print("  开了 AI 模式的话，上面这些是「示范」，")
     print("  AI 会照着这个语气自己判断该说什么，不是只会回这几句。")

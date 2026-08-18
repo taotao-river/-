@@ -47,6 +47,7 @@ class MainActivity : Activity() {
     private lateinit var groupPolicyGroup: RadioGroup
     private lateinit var fallbackField: EditText
     private lateinit var blockContactsField: EditText
+    private lateinit var allowContactsField: EditText
     private lateinit var rulesContainer: LinearLayout
     private lateinit var testInput: EditText
     private lateinit var testResult: TextView
@@ -211,6 +212,22 @@ class MainActivity : Activity() {
             addView(RadioButton(context).apply { id = groupAlwaysId; text = "群里任何消息都回（容易刷屏）" })
         }
         root.addView(groupPolicyGroup)
+
+        root.addView(divider())
+
+        // ---- 白名单 ----
+        // 放在黑名单前面，因为它才是真正管用的那条：
+        // 会导致封号的主要路径是被举报，而熟人不会举报你。
+        root.addView(section("只对这些人自动回复"))
+        allowContactsField = EditText(this).apply {
+            hint = "留空 = 对所有人开"
+        }
+        root.addView(allowContactsField)
+        root.addView(hint(
+            "填了名字之后，只有名单里的人会收到自动回复，其他人一律不回。\n\n" +
+                "⚠️ 这是最有效的防封号手段。真正可能出事的是「被人举报」，" +
+                "而熟人不会举报你。强烈建议先填三五个熟人跑几天，确认没问题再放开。"
+        ))
 
         root.addView(divider())
 
@@ -532,6 +549,7 @@ class MainActivity : Activity() {
         )
         fallbackField.setText(config.fallbackText)
         blockContactsField.setText(config.blockContacts.joinToString("，"))
+        allowContactsField.setText(config.allowContacts.joinToString("，"))
 
         rulesContainer.removeAllViews()
         val rules = config.rules.ifEmpty { listOf(Rule(name = "规则", replies = listOf(""))) }
@@ -604,6 +622,7 @@ class MainActivity : Activity() {
             rules = rules,
             fallbackText = fallbackField.text.toString().trim(),
             blockContacts = splitList(blockContactsField.text.toString()),
+            allowContacts = splitList(allowContactsField.text.toString()),
             replyMode = if (modeGroup.checkedRadioButtonId == modeAiId)
                 ReplyMode.AI else ReplyMode.KEYWORD,
             ai = AiConfig(

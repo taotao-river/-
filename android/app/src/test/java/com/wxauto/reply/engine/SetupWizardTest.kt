@@ -70,7 +70,7 @@ class SetupWizardTest {
         assertEquals(
             listOf(
                 "who", "busy", "style", "length", "emoji",
-                "appointment", "progress", "stranger", "greeting", "never",
+                "appointment", "progress", "stranger", "greeting", "never", "only_for",
             ),
             SetupWizard.QUESTIONS.map { it.id },
         )
@@ -315,5 +315,39 @@ class SetupWizardTest {
         )
         assertFalse(decision.shouldReply)
         assertTrue(decision.reason.contains("敏感词"))
+    }
+
+    // ------------------------------------------------------------ 白名单
+
+    @Test
+    fun onlyForBecomesAllowContacts() {
+        // 「先只对哪几个人开」是最有效的防风控手段：真正会出事的路径是
+        // 被举报，而熟人不会举报你。
+        val result = SetupWizard.build(answers("only_for" to listOf("小王，李雷、张三")))
+        assertEquals(listOf("小王", "李雷", "张三"), result.allowContacts)
+    }
+
+    @Test
+    fun blankOnlyForMeansEveryone() {
+        assertTrue(SetupWizard.build(answers("only_for" to listOf(""))).allowContacts.isEmpty())
+    }
+
+    @Test
+    fun whitelistActuallyBlocksOutsiders() {
+        // 生成出来但引擎不认，等于白填
+        val config = SetupWizard.applyTo(
+            EngineConfig(enabled = true, signature = "", minIntervalSeconds = 0),
+            SetupWizard.build(answers("only_for" to listOf("小王"))),
+        )
+        val engine = ReplyEngine(InMemoryStateStore())
+
+        val inside = engine.decide(config, Message(chatId = "小王", chatName = "小王", text = "在吗"))
+        val outside = engine.decide(
+            config, Message(chatId = "陌生人", chatName = "陌生人", text = "在吗")
+        )
+
+        assertTrue(inside.shouldReply)
+        assertFalse(outside.shouldReply)
+        assertTrue(outside.reason, outside.reason.contains("名单"))
     }
 }
