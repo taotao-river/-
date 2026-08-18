@@ -294,7 +294,7 @@ class SetupWizardTest {
                 maxDelaySeconds = 0,
             ),
             SetupWizard.build(answers()),
-        )
+        ).copy(activeFromMinute = -1, activeToMinute = -1)   // 时段不是这条要测的
         val engine = ReplyEngine(InMemoryStateStore())
 
         for ((text, expectedRule) in listOf(
@@ -335,7 +335,7 @@ class SetupWizardTest {
         val config = SetupWizard.applyTo(
             EngineConfig(enabled = true, cooldownSeconds = 0),
             SetupWizard.build(answers()),
-        )
+        ).copy(activeFromMinute = -1, activeToMinute = -1)   // 时段不是这条要测的
         val decision = ReplyEngine(InMemoryStateStore()).decide(
             config,
             Message(chatId = "x", chatName = "小王", text = "帮我转账500"),
@@ -365,7 +365,7 @@ class SetupWizardTest {
         val config = SetupWizard.applyTo(
             EngineConfig(enabled = true, signature = "", minIntervalSeconds = 0),
             SetupWizard.build(answers("only_for" to listOf("小王"))),
-        )
+        ).copy(activeFromMinute = -1, activeToMinute = -1)   // 时段不是这条要测的
         val engine = ReplyEngine(InMemoryStateStore())
 
         val inside = engine.decide(config, Message(chatId = "小王", chatName = "小王", text = "在吗"))
@@ -445,7 +445,7 @@ class SetupWizardTest {
         val config = SetupWizard.applyTo(
             EngineConfig(enabled = true, signature = "", minIntervalSeconds = 0),
             SetupWizard.build(answers("only_for" to listOf("  小王 "))),
-        )
+        ).copy(activeFromMinute = -1, activeToMinute = -1)   // 时段不是这条要测的
         val d = ReplyEngine(InMemoryStateStore())
             .decide(config, Message(chatId = "x", chatName = "小王", text = "在吗"))
         assertTrue(d.reason, d.shouldReply)
@@ -457,7 +457,7 @@ class SetupWizardTest {
         val config = SetupWizard.applyTo(
             EngineConfig(enabled = true, signature = "", minIntervalSeconds = 0),
             SetupWizard.build(answers("only_for" to listOf("小王"))),
-        )
+        ).copy(activeFromMinute = -1, activeToMinute = -1)   // 时段不是这条要测的
         val d = ReplyEngine(InMemoryStateStore())
             .decide(config, Message(chatId = "x", chatName = "小王他哥", text = "在吗"))
         assertFalse(d.shouldReply)

@@ -264,4 +264,55 @@ class ReplyEngineTest {
         // 秒回是最明显的机器特征，必须有延迟
         assertTrue("延迟应在 1-2 秒之间，实际 ${d.delayMillis}ms", d.delayMillis >= 1000)
     }
+
+    // ------------------------------------------------------------- 时段
+
+    private fun millisAtLocal(hour: Int, minute: Int = 0): Long =
+        java.time.LocalDate.of(2026, 1, 15).atTime(hour, minute)
+            .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+    @Test
+    fun activeHoursUseTheInjectedClock() {
+        // 这里原来用的是 LocalTime.now()，于是「在不在时段内」取决于
+        // 机器当时几点——测不了，CI 换个时间跑就挂，而且和 Python 版
+        // （一直用注入时钟）行为不一致。
+        val cfg = config().copy(activeFromMinute = 9 * 60, activeToMinute = 23 * 60)
+
+        val clock = FakeClock(millisAtLocal(10))
+        assertTrue(ReplyEngine(InMemoryStateStore(), clock, Random(42))
+            .decide(cfg, msg("在吗")).shouldReply)
+
+        val night = FakeClock(millisAtLocal(3))
+        val d = ReplyEngine(InMemoryStateStore(), night, Random(42)).decide(cfg, msg("在吗"))
+        assertFalse(d.shouldReply)
+        assertTrue(d.reason, d.reason.contains("时段"))
+    }
+
+    @Test
+    fun activeHoursCanCrossMidnight() {
+        // 22:00-02:00 这种跨零点的写法必须成立
+        val cfg = config().copy(activeFromMinute = 22 * 60, activeToMinute = 2 * 60)
+        for (hour in listOf(23, 1)) {
+            assertTrue(
+                "凌晨 $hour 点应该在 22:00-02:00 内",
+                ReplyEngine(InMemoryStateStore(), FakeClock(millisAtLocal(hour)), Random(42))
+                    .decide(cfg, msg("在吗")).shouldReply,
+            )
+        }
+        assertFalse(
+            ReplyEngine(InMemoryStateStore(), FakeClock(millisAtLocal(12)), Random(42))
+                .decide(cfg, msg("在吗")).shouldReply,
+        )
+    }
+
+    @Test
+    fun noActiveHoursMeansAllDay() {
+        val cfg = config()   // 默认 -1/-1
+        for (hour in listOf(3, 12, 23)) {
+            assertTrue(
+                ReplyEngine(InMemoryStateStore(), FakeClock(millisAtLocal(hour)), Random(42))
+                    .decide(cfg, msg("在吗")).shouldReply,
+            )
+        }
+    }
 }

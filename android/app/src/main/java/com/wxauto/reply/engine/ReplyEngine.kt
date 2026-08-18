@@ -1,6 +1,7 @@
 package com.wxauto.reply.engine
 
-import java.time.LocalTime
+import java.time.Instant
+import java.time.ZoneId
 import kotlin.random.Random
 
 /**
@@ -113,7 +114,7 @@ class ReplyEngine(
         for (rule in config.rules) {
             if (rule.replies.none { it.isNotBlank() }) continue
             if (rule.matches(text)) {
-                val reply = pickReply(identity, rule)
+                val reply = pickReply(rule)
                 return commit(config, identity, reply, "命中规则「${rule.name}」", rule.name, now)
             }
         }
@@ -142,7 +143,10 @@ class ReplyEngine(
         val to = config.activeToMinute
         if (from < 0 || to < 0) return true
 
-        val nowTime = LocalTime.now()
+        // 用传进来的时刻，不要用 LocalTime.now()：
+        // 引擎接了 clock 参数就该一路用到底，否则时段判断没法测，
+        // 而且和 Python 版（用的是注入时钟）行为不一致。
+        val nowTime = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalTime()
         val current = nowTime.hour * 60 + nowTime.minute
         // 支持跨零点，例如 22:00-02:00
         return if (from <= to) current in from..to else current >= from || current <= to
@@ -183,7 +187,7 @@ class ReplyEngine(
      * 拿到的都是第一句——一百个人收到一模一样的一句话，那正是批量发送
      * 最容易被认出来的地方。
      */
-    private fun pickReply(identity: String, rule: Rule): String {
+    private fun pickReply(rule: Rule): String {
         val usable = rule.replies.filter { it.isNotBlank() }
         val index = store.rotationIndex(rule.name) + 1
         store.setRotationIndex(rule.name, index)
