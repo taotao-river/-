@@ -26,6 +26,9 @@ limits:
   global_max_replies_per_hour: 30
   min_delay_seconds: 4
   max_delay_seconds: 15
+  global_max_replies_per_day: 100    # 每日总量上限（跑满每小时上限一天就是 720 条）
+  global_min_interval_seconds: 45    # 两条回复之间至少隔这么久（跨会话）
+  typing_seconds_per_char: 0.12      # 按回复长度追加的「打字时间」
 
 llm:
   # 接哪家模型。默认豆包——这套东西要的是「聊天像真人」，

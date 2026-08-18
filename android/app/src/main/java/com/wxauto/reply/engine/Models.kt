@@ -130,6 +130,21 @@ data class EngineConfig(
     val blockKeywords: List<String> = emptyList(),
 
     val cooldownSeconds: Int = 1800,
+
+    /** 每日总量上限。只有每小时上限的话，跑满一天是 720 条。 */
+    val maxPerDay: Int = 100,
+
+    /**
+     * 两条回复之间的最小间隔（跨会话），单位秒。
+     *
+     * 这一条是所有限流里最重要的：冷却是按会话算的，所以三十个人同时
+     * 发消息时，程序会在几十秒内挨个回完。真人不可能一秒切一个会话，
+     * 这是最容易被识别的机器特征。命中时把发送时间往后推，不丢消息。
+     */
+    val minIntervalSeconds: Int = 45,
+
+    /** 按回复长度追加的「打字时间」，单位毫秒/字。 */
+    val typingMillisPerChar: Int = 120,
     val maxPerChatPerDay: Int = 5,
     val maxPerHour: Int = 30,
     val minDelaySeconds: Int = 3,

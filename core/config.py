@@ -43,6 +43,26 @@ class Limits:
     global_max_replies_per_hour: int = 30
     min_delay_seconds: float = 3.0
     max_delay_seconds: float = 12.0
+
+    global_max_replies_per_day: int = 100
+    """每日总量上限。只有每小时上限的话，跑满一天是 720 条——
+    真人一天发几百条消息可能，但「每条都是自动回复」不可能。"""
+
+    global_min_interval_seconds: float = 45.0
+    """两条回复之间的最小间隔（跨会话）。
+
+    这一条是所有限流里最重要的：冷却是按会话算的，所以三十个人同时
+    发消息时，程序会在几十秒内挨个回完。真人不可能一秒切一个会话回一条，
+    这是最容易被识别的机器特征。
+
+    命中时不丢弃消息，而是把发送时间往后推，所以只是回得慢一点。"""
+
+    typing_seconds_per_char: float = 0.12
+    """按回复长度追加的「打字时间」。
+
+    真人打一句 30 字的话比打「嗯」慢得多。固定延迟会让长短回复的
+    响应时间一模一样，反而不自然。"""
+
     # 微信多端同时在线时，同一条消息会被安卓和 macOS 分别上报。
     # 这个窗口内内容相同的消息只回一次，避免对方收到两条。
     cross_device_dedup_seconds: int = 120

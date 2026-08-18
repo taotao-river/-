@@ -104,6 +104,9 @@ object Storage {
         put("blockContacts", JSONArray(c.blockContacts))
         put("blockKeywords", JSONArray(c.blockKeywords))
         put("cooldownSeconds", c.cooldownSeconds)
+        put("maxPerDay", c.maxPerDay)
+        put("minIntervalSeconds", c.minIntervalSeconds)
+        put("typingMillisPerChar", c.typingMillisPerChar)
         put("maxPerChatPerDay", c.maxPerChatPerDay)
         put("maxPerHour", c.maxPerHour)
         put("minDelaySeconds", c.minDelaySeconds)
@@ -155,6 +158,9 @@ object Storage {
             blockContacts = o.optJSONArray("blockContacts").toStringList(),
             blockKeywords = o.optJSONArray("blockKeywords").toStringList(),
             cooldownSeconds = o.optInt("cooldownSeconds", fallback.cooldownSeconds),
+            maxPerDay = o.optInt("maxPerDay", fallback.maxPerDay),
+            minIntervalSeconds = o.optInt("minIntervalSeconds", fallback.minIntervalSeconds),
+            typingMillisPerChar = o.optInt("typingMillisPerChar", fallback.typingMillisPerChar),
             maxPerChatPerDay = o.optInt("maxPerChatPerDay", fallback.maxPerChatPerDay),
             maxPerHour = o.optInt("maxPerHour", fallback.maxPerHour),
             minDelaySeconds = o.optInt("minDelaySeconds", fallback.minDelaySeconds),
@@ -272,6 +278,7 @@ object Storage {
         private val perChat = HashMap<String, List<Long>>()
         private var recent: List<Long> = emptyList()
         private val rotation = HashMap<String, Int>()
+        private var lastSend: Long = 0L
 
         init {
             runCatching {
@@ -299,6 +306,9 @@ object Storage {
         override fun setRecentReplyTimes(times: List<Long>) { recent = times }
         override fun rotationIndex(key: String) = rotation[key] ?: -1
         override fun setRotationIndex(key: String, index: Int) { rotation[key] = index }
+        // 只影响未来几十秒的排队，不落盘：重启后最多让第一条早发一点
+        override fun lastSendAt() = lastSend
+        override fun setLastSendAt(at: Long) { lastSend = at }
 
         override fun flush() {
             val o = JSONObject().apply {

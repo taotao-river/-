@@ -66,8 +66,17 @@ class ReplyEngine:
         # 账号 -> 最近一小时的回复时间戳。按账号隔离而不是全局共用：
         # 一个号的规则写错刷爆保险丝，不该把另一个号也一起饿死。
         self._recent_replies: dict[str, deque[float]] = {}
-        # chat 身份 -> 上次用过的回复文案下标，避免同一条重复刷屏
+        # 规则名 -> 上次用过的文案下标。
+        #
+        # 刻意用「全局」而不是「每会话」计数：按会话算的话，每个人拿到的
+        # 都是 replies[0]——一百个人收到一模一样的一句话，这是批量发送的
+        # 典型特征。全局轮换让相邻两条发出去的内容不同。
         self._rotation: dict[str, int] = {}
+        # 账号 -> 上一条回复的「预计发出时刻」。用来拉开跨会话的间隔，
+        # 记的是发送时刻而不是决策时刻，这样连续几条能正确地依次排开。
+        self._last_send_at: dict[str, float] = {}
+        # 账号 -> 当天已回复的时间戳
+        self._daily_replies: dict[str, list[float]] = {}
         # chat 身份 -> (最后处理的消息内容, 时间戳)，用于跨端去重
         self._last_seen: dict[str, tuple[str, float]] = {}
 
@@ -212,13 +221,22 @@ class ReplyEngine:
         if len(recent) >= limits.global_max_replies_per_hour:
             return f"账号 {account!r} 一小时上限 {limits.global_max_replies_per_hour} 条已满"
 
+        daily = [t for t in self._daily_replies.get(account, []) if now - t < _DAY_SECONDS]
+        self._daily_replies[account] = daily
+        if len(daily) >= limits.global_max_replies_per_day:
+            return f"账号 {account!r} 今日上限 {limits.global_max_replies_per_day} 条已满"
+
         return None
 
     def _pick_reply(self, identity: str, rule_name: str, replies: list[str]) -> str:
-        """同一会话内轮换文案，避免连续两次一模一样。"""
-        key = f"{identity}::{rule_name}"
-        index = self._rotation.get(key, -1) + 1
-        self._rotation[key] = index
+        """轮换文案。
+
+        计数是全局的（只按规则名），不按会话分开。按会话算的话，每个人
+        拿到的都是 replies[0]，一百个人收到一模一样的一句话——那正是
+        批量发送最容易被认出来的地方。
+        """
+        index = self._rotation.get(rule_name, -1) + 1
+        self._rotation[rule_name] = index
         return replies[index % len(replies)]
 
     def _commit(
@@ -234,13 +252,32 @@ class ReplyEngine:
         if self.config.signature:
             text = f"{text}{self.config.signature}"
 
+        limits = self.config.limits
+
+        # ---- 延迟 ----
+        # 三个部分：
+        #   1. 基础随机延迟——秒回是最明显的机器特征
+        #   2. 按字数追加的「打字时间」——真人打 30 个字比打「嗯」慢
+        #   3. 跨会话的最小间隔——见下
+        delay = random.uniform(limits.min_delay_seconds, limits.max_delay_seconds)
+        delay += len(text) * limits.typing_seconds_per_char
+
+        # 拉开与上一条回复的间隔。
+        #
+        # 冷却是按会话算的，所以三十个人同时发消息时，程序本来会在几十秒内
+        # 挨个回完——真人不可能一秒切一个会话。这里不丢消息，只是把发送
+        # 时刻往后推，于是多条回复会自然地依次排开。
+        account = message.account
+        earliest = self._last_send_at.get(account, 0.0) + limits.global_min_interval_seconds
+        send_at = max(now + delay, earliest)
+        delay = send_at - now
+        self._last_send_at[account] = send_at
+
         self._last_reply_at[identity] = now
         self._chat_replies.setdefault(identity, []).append(now)
-        self._recent_replies.setdefault(message.account, deque()).append(now)
+        self._recent_replies.setdefault(account, deque()).append(now)
+        self._daily_replies.setdefault(account, []).append(now)
         self._save_state()
-
-        limits = self.config.limits
-        delay = random.uniform(limits.min_delay_seconds, limits.max_delay_seconds)
 
         logger.info(
             "[%s/%s] %s -> %s (%s)",
@@ -270,9 +307,12 @@ class ReplyEngine:
             k: deque(v) for k, v in data.get("recent_replies", {}).items()
         }
         self._rotation = data.get("rotation", {})
+        self._daily_replies = data.get("daily_replies", {})
         self._last_seen = {
             k: tuple(v) for k, v in data.get("last_seen", {}).items()
         }
+        # _last_send_at 刻意不持久化：它只影响未来 45 秒内的排队，
+        # 重启后从零开始最多让第一条回复早发一点，没有意义再存一份。
 
     def _save_state(self) -> None:
         if not self._state_path:
@@ -282,6 +322,7 @@ class ReplyEngine:
             "chat_replies": self._chat_replies,
             "recent_replies": {k: list(v) for k, v in self._recent_replies.items()},
             "rotation": self._rotation,
+            "daily_replies": self._daily_replies,
             "last_seen": {k: list(v) for k, v in self._last_seen.items()},
         }
         try:

@@ -161,21 +161,32 @@ class ReplyEngine(
             return "今天已经回过 ${config.maxPerChatPerDay} 条了"
         }
 
-        val recent = store.recentReplyTimes().filter { now - it < HOUR_MILLIS }
+        // 只保留一份 24 小时的记录，小时窗口和天窗口都从它算，
+        // 免得两份列表各裁各的、对不上
+        val recent = store.recentReplyTimes().filter { now - it < DAY_MILLIS }
         store.setRecentReplyTimes(recent)
-        if (recent.size >= config.maxPerHour) {
+
+        if (recent.count { now - it < HOUR_MILLIS } >= config.maxPerHour) {
             return "一小时内回复数已达上限 ${config.maxPerHour} 条"
+        }
+        if (recent.size >= config.maxPerDay) {
+            return "今天回复总数已达上限 ${config.maxPerDay} 条"
         }
 
         return null
     }
 
-    /** 同一会话内轮换文案，避免连着两次一模一样。 */
+    /**
+     * 轮换文案。
+     *
+     * 计数是全局的（只按规则名），不按会话分开。按会话算的话，每个人
+     * 拿到的都是第一句——一百个人收到一模一样的一句话，那正是批量发送
+     * 最容易被认出来的地方。
+     */
     private fun pickReply(identity: String, rule: Rule): String {
         val usable = rule.replies.filter { it.isNotBlank() }
-        val key = "$identity::${rule.name}"
-        val index = store.rotationIndex(key) + 1
-        store.setRotationIndex(key, index)
+        val index = store.rotationIndex(rule.name) + 1
+        store.setRotationIndex(rule.name, index)
         return usable[index.mod(usable.size)]
     }
 
@@ -192,12 +203,24 @@ class ReplyEngine(
         store.setLastReplyAt(identity, now)
         store.setChatReplyTimes(identity, store.chatReplyTimes(identity) + now)
         store.setRecentReplyTimes(store.recentReplyTimes() + now)
-        store.flush()
 
-        // 秒回是最明显的机器特征，也最容易触发风控
+        // ---- 延迟 ----
+        // 三部分：基础随机延迟（秒回是最明显的机器特征）、
+        // 按字数算的打字时间（真人打 30 个字比打「嗯」慢）、
+        // 以及跨会话的最小间隔。
         val minMs = config.minDelaySeconds.coerceAtLeast(0) * 1000L
         val maxMs = config.maxDelaySeconds.coerceAtLeast(config.minDelaySeconds) * 1000L
-        val delay = if (maxMs > minMs) random.nextLong(minMs, maxMs) else minMs
+        var delay = if (maxMs > minMs) random.nextLong(minMs, maxMs) else minMs
+        delay += text.length * config.typingMillisPerChar.coerceAtLeast(0)
+
+        // 冷却是按会话算的，挡不住「三十个人同时发消息、几十秒内挨个回完」。
+        // 这里把发送时刻往后推，让多条回复依次排开，而不是丢掉消息。
+        val earliest = store.lastSendAt() + config.minIntervalSeconds * 1000L
+        val sendAt = maxOf(now + delay, earliest)
+        delay = sendAt - now
+        store.setLastSendAt(sendAt)
+
+        store.flush()
 
         return Decision(
             shouldReply = true,
@@ -226,6 +249,10 @@ interface EngineStateStore {
     fun rotationIndex(key: String): Int
     fun setRotationIndex(key: String, index: Int)
 
+    /** 上一条回复的「预计发出时刻」，用来拉开跨会话的间隔。 */
+    fun lastSendAt(): Long
+    fun setLastSendAt(at: Long)
+
     /** 把内存里的改动落盘。 */
     fun flush()
 }
@@ -236,6 +263,7 @@ class InMemoryStateStore : EngineStateStore {
     private val perChat = HashMap<String, List<Long>>()
     private var recent: List<Long> = ArrayList()
     private val rotation = HashMap<String, Int>()
+    private var lastSend: Long = 0L
 
     override fun lastReplyAt(identity: String) = last[identity]
     override fun setLastReplyAt(identity: String, at: Long) { last[identity] = at }
@@ -245,5 +273,7 @@ class InMemoryStateStore : EngineStateStore {
     override fun setRecentReplyTimes(times: List<Long>) { recent = times }
     override fun rotationIndex(key: String) = rotation[key] ?: -1
     override fun setRotationIndex(key: String, index: Int) { rotation[key] = index }
+    override fun lastSendAt() = lastSend
+    override fun setLastSendAt(at: Long) { lastSend = at }
     override fun flush() = Unit
 }
