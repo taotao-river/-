@@ -26,7 +26,6 @@ def answers(**overrides):
         "who": ["work", "friend"],
         "busy": ["hands"],
         "style": "casual",
-        "length": "varies",
         "emoji": "none",
         "appointment": "hold",
         "progress": "rough",
@@ -70,12 +69,11 @@ def test_both_implementations_ask_the_same_questions():
         "who",
         "busy",
         "style",
-        "length",
-        "emoji",
+        "greeting",
         "appointment",
         "progress",
         "stranger",
-        "greeting",
+        "emoji",
         "never",
         "only_for",
     ]
@@ -156,10 +154,14 @@ def test_exclamation_kept_when_user_likes_them():
     assert any("！" in e["me"] for e in result.examples)
 
 
-def test_length_controls_max_chars():
-    assert build_result(answers(length="short")).max_chars == 20
-    assert build_result(answers(length="medium")).max_chars == 45
-    assert build_result(answers(length="varies")).max_chars == 30
+def test_reply_length_follows_the_chosen_voice():
+    """长度不再单独问一题——选了「在」的人不会突然写三句话。
+
+    少一道题，而且推断出来的比用户自己估的准。
+    """
+    assert build_result(answers(style="brief")).max_chars == 20
+    assert build_result(answers(style="casual")).max_chars == 30
+    assert build_result(answers(style="warm")).max_chars == 45
 
 
 def test_own_words_beat_the_template():
@@ -234,12 +236,12 @@ def test_generated_yaml_loads_for_every_situation_combo():
 
 
 def test_generated_yaml_loads_for_every_identity_combo():
-    for busy, length, emoji in product(
-        ("work", "hands", "out", "later"),
-        ("short", "medium", "varies"),
-        ("none", "some", "lots"),
+    for busy, style, emoji in product(
+        ("work", "hands", "out", "later", "unsure"),
+        ("casual", "polite", "warm", "brief"),
+        ("none", "emoji", "mark", "both"),
     ):
-        text = to_yaml(build_result(answers(busy=busy, length=length, emoji=emoji)))
+        text = to_yaml(build_result(answers(busy=[busy], style=style, emoji=emoji)))
         config = build_config(yaml.safe_load(text))
         assert config.persona.max_chars > 0
 

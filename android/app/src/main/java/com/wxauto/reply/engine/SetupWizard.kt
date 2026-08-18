@@ -75,75 +75,65 @@ object SetupWizard {
         ),
         WizardQuestion(
             id = "style",
-            prompt = "你平时打字是什么感觉？",
+            prompt = "别人发「在吗」，下面哪句最像你会回的？",
             kind = QuestionKind.SINGLE,
-            hint = "这一题最影响像不像你本人",
+            hint = "选不出来就挑个最接近的，下一题可以自己写",
             options = listOf(
-                WizardOption("casual", "简短随便，跟熟人聊天那种"),
-                WizardOption("polite", "客气一点，会用「您」"),
-                WizardOption("warm", "热情，愿意多聊两句，爱开玩笑"),
-                WizardOption("brief", "能少说就少说，一两个字就完事"),
-            ),
-        ),
-        WizardQuestion(
-            id = "length",
-            prompt = "你一般回多长？",
-            kind = QuestionKind.SINGLE,
-            options = listOf(
-                WizardOption("short", "一句话就够"),
-                WizardOption("medium", "两三句"),
-                WizardOption("varies", "看情况，不一定"),
-            ),
-        ),
-        WizardQuestion(
-            id = "emoji",
-            prompt = "表情和感叹号，你用哪个？",
-            kind = QuestionKind.SINGLE,
-            hint = "这两个是分开的：有人爱发表情但从不用感叹号",
-            options = listOf(
-                WizardOption("none", "都不用"),
-                WizardOption("emoji", "只发表情，不用感叹号"),
-                WizardOption("mark", "只用感叹号，不发表情"),
-                WizardOption("both", "两个都用"),
-            ),
-        ),
-        WizardQuestion(
-            id = "appointment",
-            prompt = "有人约你见面、问你哪天有空——你希望怎么替你回？",
-            kind = QuestionKind.SINGLE,
-            hint = "不管选哪个，程序都不会替你答应一个具体时间",
-            options = listOf(
-                WizardOption("hold", "先拖住，说要看一下日程"),
-                WizardOption("refuse", "直接说最近排不开"),
-                WizardOption("ask", "先问清楚什么事"),
-            ),
-        ),
-        WizardQuestion(
-            id = "progress",
-            prompt = "有人催你「那个事办得怎么样了」呢？",
-            kind = QuestionKind.SINGLE,
-            options = listOf(
-                WizardOption("rough", "给个大概时间感觉，但不说死"),
-                WizardOption("working", "就说在弄，不给任何时间"),
-                WizardOption("person", "说等我本人回复"),
-            ),
-        ),
-        WizardQuestion(
-            id = "stranger",
-            prompt = "推销、拉群、求投票点赞这种呢？",
-            kind = QuestionKind.SINGLE,
-            options = listOf(
-                WizardOption("polite", "客气地拒绝"),
-                WizardOption("blunt", "干脆一点，一句「不需要」"),
-                WizardOption("later", "说我晚点看，不表态"),
+                WizardOption("casual", "在，怎么了"),
+                WizardOption("polite", "在的，您说"),
+                WizardOption("warm", "在呢！咋啦"),
+                WizardOption("brief", "在"),
             ),
         ),
         WizardQuestion(
             id = "greeting",
-            prompt = "别人发「在吗」，你自己会怎么回？",
+            prompt = "上面那句不太像的话，你自己会怎么回「在吗」？",
             kind = QuestionKind.TEXT,
-            hint = "用你平时真会说的话。留空就用默认的",
+            hint = "像的话直接跳过。写了的话以你写的为准",
             optional = true,
+        ),
+        WizardQuestion(
+            id = "appointment",
+            prompt = "别人说「明天下午有空不，一起吃个饭」，你想怎么处理？",
+            kind = QuestionKind.SINGLE,
+            hint = "下面只是示意，实际发出去的话会用你自己的语气",
+            options = listOf(
+                WizardOption("hold", "「我看下日程，晚点回你」—— 先拖住"),
+                WizardOption("refuse", "「最近有点排不开，下次吧」—— 直接推掉"),
+                WizardOption("ask", "「什么事啊，你先说说」—— 先问清楚"),
+            ),
+        ),
+        WizardQuestion(
+            id = "progress",
+            prompt = "别人催「那个东西弄得怎么样了」呢？",
+            kind = QuestionKind.SINGLE,
+            options = listOf(
+                WizardOption("rough", "「在弄了，这两天给你结果」—— 给个大概"),
+                WizardOption("working", "「在弄着呢」—— 不给时间"),
+                WizardOption("person", "「这个我等下本人回你」—— 交给自己"),
+            ),
+        ),
+        WizardQuestion(
+            id = "stranger",
+            prompt = "别人发「加个群呗，有福利」这种呢？",
+            kind = QuestionKind.SINGLE,
+            options = listOf(
+                WizardOption("polite", "「这个我不太需要，谢谢」—— 客气拒绝"),
+                WizardOption("blunt", "「不需要」—— 干脆"),
+                WizardOption("later", "「我晚点看看」—— 不表态"),
+            ),
+        ),
+        WizardQuestion(
+            id = "emoji",
+            prompt = "别人发「哈哈哈哈太逗了」，你回哪个？",
+            kind = QuestionKind.SINGLE,
+            hint = "看的是符号，不是内容",
+            options = listOf(
+                WizardOption("none", "确实"),
+                WizardOption("emoji", "确实 😂"),
+                WizardOption("mark", "确实！"),
+                WizardOption("both", "确实！😂"),
+            ),
         ),
         WizardQuestion(
             id = "never",
@@ -159,8 +149,7 @@ object SetupWizard {
             kind = QuestionKind.TEXT,
             hint = "强烈建议先填三五个熟人。留空 = 对所有人开，风险高很多",
             optional = true,
-            placeholder = "填你在微信里看到的名字：设了备注就填备注名，" +
-                "没设就填昵称，不是微信号。答完在设置页里还能直接勾选。",
+            placeholder = "答完在设置页里可以直接勾选，不用在这里打字",
         ),
     )
 
@@ -288,7 +277,10 @@ object SetupWizard {
     // 兜底文案只用一条理由，多选时取第一条
     private val BUSY_ORDER = listOf("work", "hands", "out", "later", "unsure")
 
-    private val MAX_CHARS = mapOf("short" to 20, "medium" to 45, "varies" to 30)
+    // 回复长度上限直接从说话风格推断，不再单独问一题：
+    // 选了「在」的人不会突然写三句话，问了也是多余的一道题。
+    private val MAX_CHARS_BY_STYLE =
+        mapOf("brief" to 20, "casual" to 30, "polite" to 40, "warm" to 45)
 
     // 表情和感叹号是两回事：有人爱发表情但从不用感叹号。
     // 之前把它们混成一个「用不用」的程度问题，是设计错误。
@@ -325,8 +317,6 @@ object SetupWizard {
             .filter { BUSY_LINE.containsKey(it) }
             .ifEmpty { listOf("hands") }
 
-        val length = one("length", "varies")
-
         val emojiRaw = one("emoji", "none")
         val emoji = (EMOJI_LEGACY[emojiRaw] ?: emojiRaw)
             .takeIf { EMOJI_LINE.containsKey(it) } ?: "none"
@@ -352,9 +342,9 @@ object SetupWizard {
         val tone = buildString {
             append(voice.getValue("tone"))
             append(EMOJI_LINE[emoji] ?: EMOJI_LINE.getValue("none"))
-            when (length) {
-                "short" -> append("一句话能说完就别说两句。")
-                "medium" -> append("最多两三句，别写成段落。")
+            when (style) {
+                "brief" -> append("一句话能说完就别说两句。")
+                "polite", "warm" -> append("最多两三句，别写成段落。")
             }
         }
 
@@ -439,7 +429,7 @@ object SetupWizard {
                 tone = tone,
                 playbook = playbook,
                 boundaries = boundaries,
-                maxChars = MAX_CHARS[length] ?: 30,
+                maxChars = MAX_CHARS_BY_STYLE[style] ?: 30,
                 examples = examples,
             ),
             rules = rules,

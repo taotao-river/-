@@ -21,7 +21,6 @@ class SetupWizardTest {
             "who" to listOf("work", "friend"),
             "busy" to listOf("hands"),
             "style" to listOf("casual"),
-            "length" to listOf("varies"),
             "emoji" to listOf("none"),
             "appointment" to listOf("hold"),
             "progress" to listOf("rough"),
@@ -69,8 +68,8 @@ class SetupWizardTest {
         // 人设会不一样，同一个人在电脑和手机上的语气就对不上了
         assertEquals(
             listOf(
-                "who", "busy", "style", "length", "emoji",
-                "appointment", "progress", "stranger", "greeting", "never", "only_for",
+                "who", "busy", "style", "greeting",
+                "appointment", "progress", "stranger", "emoji", "never", "only_for",
             ),
             SetupWizard.QUESTIONS.map { it.id },
         )
@@ -125,7 +124,6 @@ class SetupWizardTest {
                 "style" to listOf("不存在"),
                 "appointment" to listOf("乱写"),
                 "busy" to listOf("???"),
-                "length" to listOf(""),
             )
         )
         assertTrue(result.persona.tone.isNotBlank())
@@ -176,10 +174,12 @@ class SetupWizardTest {
     }
 
     @Test
-    fun lengthControlsMaxChars() {
-        assertEquals(20, SetupWizard.build(answers("length" to listOf("short"))).persona.maxChars)
-        assertEquals(45, SetupWizard.build(answers("length" to listOf("medium"))).persona.maxChars)
-        assertEquals(30, SetupWizard.build(answers("length" to listOf("varies"))).persona.maxChars)
+    fun replyLengthFollowsTheChosenVoice() {
+        // 长度不再单独问一题——选了「在」的人不会突然写三句话。
+        // 少一道题，而且推断出来的比用户自己估的准。
+        assertEquals(20, SetupWizard.build(answers("style" to listOf("brief"))).persona.maxChars)
+        assertEquals(30, SetupWizard.build(answers("style" to listOf("casual"))).persona.maxChars)
+        assertEquals(45, SetupWizard.build(answers("style" to listOf("warm"))).persona.maxChars)
     }
 
     @Test
