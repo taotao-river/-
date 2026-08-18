@@ -18,16 +18,32 @@ PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 VENV="$REPO_DIR/.venv"
 
 echo "==> 检查 Python"
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "找不到 python3。先装一个：brew install python" >&2
+# 不用 command -v python3：macOS 自带的 /usr/bin/python3 是个占位符，
+# 存在但不可用，执行它会弹窗要求安装 Xcode 命令行工具（国内常下载失败，
+# 且每次调用都会重新弹）。只认真正可用的解释器。
+PY=""
+for candidate in \
+    /Library/Frameworks/Python.framework/Versions/3.*/bin/python3 \
+    /opt/homebrew/bin/python3 \
+    /usr/local/bin/python3
+do
+    [ -x "$candidate" ] && PY="$candidate" && break
+done
+if [ -z "$PY" ] && xcode-select -p >/dev/null 2>&1 && [ -x /usr/bin/python3 ]; then
+    PY="/usr/bin/python3"
+fi
+if [ -z "$PY" ]; then
+    echo "找不到可用的 python3。" >&2
+    echo "从 https://www.python.org/downloads/macos/ 装一个即可" >&2
+    echo "（弹出「安装命令行开发者工具」时选「以后」，本项目不需要它）" >&2
     exit 1
 fi
-python3 --version
+"$PY" --version
 
 echo
 echo "==> 建虚拟环境（避免污染系统 Python）"
 if [ ! -d "$VENV" ]; then
-    python3 -m venv "$VENV"
+    "$PY" -m venv "$VENV"
 fi
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet fastapi "uvicorn[standard]" pyyaml requests
@@ -51,7 +67,7 @@ fi
 
 TOKEN_FILE="$REPO_DIR/.wxauto_token"
 if [ ! -f "$TOKEN_FILE" ]; then
-    python3 -c "import secrets; print(secrets.token_hex(16))" > "$TOKEN_FILE"
+    "$PY" -c "import secrets; print(secrets.token_hex(16))" > "$TOKEN_FILE"
     chmod 600 "$TOKEN_FILE"
 fi
 TOKEN="$(cat "$TOKEN_FILE")"

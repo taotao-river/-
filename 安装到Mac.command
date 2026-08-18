@@ -35,17 +35,49 @@ echo
 
 echo "【1/5】检查运行环境"
 
-if ! command -v python3 >/dev/null 2>&1; then
+# 找一个「真的」Python。
+#
+# 这里不能用 command -v python3：macOS 自带的 /usr/bin/python3 是个占位符，
+# 文件存在但不是 Python——一执行它，系统就会弹窗让你装 Xcode 命令行工具。
+# 那个下载在国内经常失败，而且脚本每调用一次 python3 就弹一次，
+# 关掉还会再弹，非常烦人。所以：只在确认装了开发者工具的前提下才碰它。
+PY=""
+for candidate in \
+    /Library/Frameworks/Python.framework/Versions/3.*/bin/python3 \
+    /opt/homebrew/bin/python3 \
+    /usr/local/bin/python3
+do
+    if [ -x "$candidate" ]; then PY="$candidate"; break; fi
+done
+
+# 只有装了命令行工具，/usr/bin/python3 才是真的能用的
+if [ -z "$PY" ] && xcode-select -p >/dev/null 2>&1 && [ -x /usr/bin/python3 ]; then
+    PY="/usr/bin/python3"
+fi
+
+if [ -z "$PY" ]; then
     echo
-    echo "  缺少 Python，需要先装一下。"
-    echo "  正在打开下载页面，请下载并安装«macOS 64-bit universal2 installer»，"
-    echo "  装完之后重新双击本文件。"
+    echo "  ┌────────────────────────────────────────────────────────┐"
+    echo "  │  还缺一个 Python，装一下就好（大约 3 分钟）             │"
+    echo "  └────────────────────────────────────────────────────────┘"
+    echo
+    echo "  ⚠️ 重要：如果屏幕上弹出「需要安装命令行开发者工具」，"
+    echo "     请点「以后」或「取消」，不要点安装。"
+    echo "     那个东西又大又容易下载失败，我们不需要它。"
+    echo
+    echo "  正在打开 Python 官网下载页面。请找到："
+    echo
+    echo "       macOS 64-bit universal2 installer"
+    echo
+    echo "  下载到的是一个 .pkg 文件，双击它，一路点「继续」装完。"
+    echo "  装完之后回来重新双击「安装到Mac.command」就行。"
     echo
     open "https://www.python.org/downloads/macos/"
-    read -n 1 -s -r -p "按任意键关闭..."
+    read -n 1 -s -r -p "按任意键关闭本窗口..."
     exit 0
 fi
-echo "      Python 有了 ($(python3 --version 2>&1))"
+
+echo "      Python 有了 ($("$PY" --version 2>&1))"
 
 if [ ! -d "/Applications/WeChat.app" ]; then
     echo
@@ -62,7 +94,7 @@ echo "      微信有了"
 echo
 echo "【2/5】准备运行环境（第一次会慢一点，请耐心等）"
 VENV=".venv"
-[ -d "$VENV" ] || python3 -m venv "$VENV"
+[ -d "$VENV" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet fastapi "uvicorn[standard]" pyyaml requests
 echo "      好了"
@@ -86,7 +118,7 @@ else
 fi
 
 if [ ! -f .wxauto_token ]; then
-    python3 -c "import secrets; print(secrets.token_hex(16))" > .wxauto_token
+    "$PY" -c "import secrets; print(secrets.token_hex(16))" > .wxauto_token
     chmod 600 .wxauto_token
 fi
 TOKEN="$(cat .wxauto_token)"
