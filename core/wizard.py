@@ -60,13 +60,15 @@ QUESTIONS: list[Question] = [
     ),
     Question(
         id="busy",
-        prompt="你一般为什么没法马上回消息？",
-        kind="single",
+        prompt="你一般为什么没马上回消息？",
+        kind="multi",
+        hint="可以多选，用逗号隔开",
         options=[
             Option("work", "在上班或上课，手机不方便看"),
             Option("hands", "手上忙着别的事，腾不开"),
             Option("out", "经常在外面、在路上"),
-            Option("later", "看得到，就是想晚点再回"),
+            Option("later", "看到了，但不太想马上回"),
+            Option("unsure", "有些消息不知道怎么回，想想再说"),
         ],
     ),
     Question(
@@ -93,12 +95,14 @@ QUESTIONS: list[Question] = [
     ),
     Question(
         id="emoji",
-        prompt="表情和感叹号呢？",
+        prompt="表情和感叹号，你用哪个？",
         kind="single",
+        hint="这两个是分开的：有人爱发表情但从不用感叹号",
         options=[
-            Option("none", "基本不用"),
-            Option("some", "偶尔用一个"),
-            Option("lots", "挺爱用的"),
+            Option("none", "都不用"),
+            Option("emoji", "只发表情，不用感叹号"),
+            Option("mark", "只用感叹号，不发表情"),
+            Option("both", "两个都用"),
         ],
     ),
     Question(
@@ -151,9 +155,14 @@ QUESTIONS: list[Question] = [
         id="only_for",
         prompt="先只对哪几个人开？",
         kind="text",
-        hint="填微信备注名，多个用逗号隔开。强烈建议先填三五个熟人",
+        hint="强烈建议先填三五个熟人。多个用逗号隔开",
         optional=True,
-        placeholder="留空 = 对所有人开（风险高很多，见下面说明）",
+        placeholder=(
+            "填你在微信里看到的那个名字——设了备注就填备注名，没设就填昵称，\n"
+            "  不是微信号。空格和大小写不影响。\n"
+            "  不确定叫什么？装完跑一下「列出会话名」就能照抄（见最后提示）。\n"
+            "  留空 = 对所有人开，风险高很多"
+        ),
     ),
 ]
 
@@ -272,19 +281,37 @@ _WHO_LABEL = {
 }
 
 _BUSY_LINE = {
-    "work": "我白天要上班，手机不太方便看",
-    "hands": "我平时手上都忙着事，腾不开",
-    "out": "我经常在外面、在路上",
-    "later": "我消息看得到，但常常想晚点再回",
+    "work": "白天要上班，手机不太方便看",
+    "hands": "手上常忙着别的事，腾不开",
+    "out": "经常在外面、在路上",
+    "later": "消息看得到，但常常不太想马上回",
+    "unsure": "有些消息我得想想怎么回，就先放着了",
 }
+
+# 兜底文案只用一条理由，多选时取第一条
+_BUSY_ORDER = ("work", "hands", "out", "later", "unsure")
 
 _MAX_CHARS = {"short": 20, "medium": 45, "varies": 30}
 
+# 表情和感叹号是两回事：有人爱发表情但从不用感叹号。
+# 之前把它们混成一个「用不用」的程度问题，是设计错误。
 _EMOJI_LINE = {
-    "none": "不用感叹号，不发表情。",
-    "some": "偶尔用一个感叹号或者表情，别多。",
-    "lots": "可以用感叹号和常见表情，别过头。",
+    "none": "不用感叹号，也不发表情。",
+    "emoji": "会发表情，但不用感叹号。",
+    "mark": "会用感叹号，但基本不发表情。",
+    "both": "感叹号和表情都会用，但别过头。",
 }
+
+# 旧版本存下来的答案，映射到新的选项上，免得重装一次人设就变了
+_EMOJI_LEGACY = {"some": "emoji", "lots": "both"}
+
+
+def _uses_exclaim(emoji: str) -> bool:
+    return emoji in ("mark", "both")
+
+
+def _uses_emoji(emoji: str) -> bool:
+    return emoji in ("emoji", "both")
 
 
 @dataclass
@@ -322,11 +349,12 @@ def _split_lines(raw: str) -> list[str]:
 
 
 def _tune(text: str, emoji: str) -> str:
-    """选了「基本不用感叹号」就别在示范里塞感叹号。
+    """说了不用感叹号，就别在示范里塞感叹号。
 
     示范和语气说明自相矛盾时，模型会照着示范走——示范的分量更重。
+    注意只管感叹号：爱发表情和爱用感叹号是两回事。
     """
-    if emoji != "none":
+    if _uses_exclaim(emoji):
         return text
     return text.replace("！", "").replace("!", "")
 
@@ -338,9 +366,19 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
         style = "casual"
     voice = _VOICE[style]
 
-    busy = _pick(answers, "busy", "hands")
+    # busy 是多选：「在上班」和「不知道怎么回」可以同时成立
+    busy_raw = answers.get("busy") or []
+    busy_ids = [b for b in (busy_raw if isinstance(busy_raw, list) else [busy_raw])
+                if b in _BUSY_LINE]
+    if not busy_ids:
+        busy_ids = ["hands"]
+
     length = _pick(answers, "length", "varies")
+
     emoji = _pick(answers, "emoji", "none")
+    emoji = _EMOJI_LEGACY.get(emoji, emoji)
+    if emoji not in _EMOJI_LINE:
+        emoji = "none"
     appointment = _APPOINTMENT.get(_pick(answers, "appointment", "hold"), _APPOINTMENT["hold"])
     progress = _PROGRESS.get(_pick(answers, "progress", "rough"), _PROGRESS["rough"])
     stranger = _STRANGER.get(_pick(answers, "stranger", "polite"), _STRANGER["polite"])
@@ -355,9 +393,9 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
     identity_parts = []
     if labels:
         identity_parts.append(f"平时给我发消息的主要是{'、'.join(labels)}。")
-    identity_parts.append(
-        f"{_BUSY_LINE.get(busy, _BUSY_LINE['hands'])}，微信经常隔一会儿才翻一次，看到会回。"
-    )
+    reasons = [_BUSY_LINE[b] for b in _BUSY_ORDER if b in busy_ids]
+    identity_parts.append("我" + "；".join(reasons) + "。")
+    identity_parts.append("微信经常隔一会儿才翻一次，看到会回。")
     identity = "".join(identity_parts)
 
     # ---- 我说话的方式 ----
@@ -380,6 +418,13 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
         "看不懂对方在说什么，或者事情比较重要：直接说等我本人回你，"
         "不要硬猜着接话。",
     ]
+    if "unsure" in busy_ids:
+        # 用户自己说了「有些消息不知道怎么回」——那就把模型也调保守些，
+        # 拿不准时先拖住，别替他现编一个答案
+        playbook_lines.append(
+            "凡是拿不准该怎么回的：宁可先拖着，说等我本人回你，"
+            "绝对不要自己编一个答案。"
+        )
     playbook = "\n".join(playbook_lines)
 
     # ---- 绝对不能答应的 ----
@@ -404,8 +449,10 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
         },
         {"them": "那个东西弄得怎么样了", "me": say(progress)},
         {
+            # 爱发表情的人，示范里也得有表情——不然示范和语气说明打架，
+            # 模型会照着示范走
             "them": "哈哈哈哈太逗了",
-            "me": _tune(voice["chat"], emoji),
+            "me": _tune(voice["chat"], emoji) + ("😂" if _uses_emoji(emoji) else ""),
             "note": "闲聊就随便接，别过度热情",
         },
     ]
@@ -437,7 +484,7 @@ def build_result(answers: dict[str, Answer]) -> WizardResult:
     ]
 
     # ---- 兜底 ----
-    busy_text = _BUSY_LINE.get(busy, _BUSY_LINE["hands"])
+    busy_text = "我" + next(_BUSY_LINE[b] for b in _BUSY_ORDER if b in busy_ids)
     if style == "polite":
         fallback_text = f"{busy_text}，看到会尽快回复您"
     elif style == "brief":
@@ -655,6 +702,10 @@ def _preview(result: WizardResult) -> None:
         print("  ⚠️  会对所有人自动回复。")
         print("     真正会出事的路径是被举报，而熟人不会举报你。")
         print("     建议重答一遍，在最后一题填三五个熟人先跑几天。")
+        print()
+        print("     不确定该填什么名字？先装完，然后运行：")
+        print("       python3 macos/wechat_mac_bot.py --contacts")
+        print("     它会把程序看到的会话名原样列出来，照抄就行。")
     print()
     print("  开了 AI 模式的话，上面这些是「示范」，")
     print("  AI 会照着这个语气自己判断该说什么，不是只会回这几句。")

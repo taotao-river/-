@@ -62,13 +62,15 @@ object SetupWizard {
         ),
         WizardQuestion(
             id = "busy",
-            prompt = "你一般为什么没法马上回消息？",
-            kind = QuestionKind.SINGLE,
+            prompt = "你一般为什么没马上回消息？",
+            kind = QuestionKind.MULTI,
+            hint = "可以多选",
             options = listOf(
                 WizardOption("work", "在上班或上课，手机不方便看"),
                 WizardOption("hands", "手上忙着别的事，腾不开"),
                 WizardOption("out", "经常在外面、在路上"),
-                WizardOption("later", "看得到，就是想晚点再回"),
+                WizardOption("later", "看到了，但不太想马上回"),
+                WizardOption("unsure", "有些消息不知道怎么回，想想再说"),
             ),
         ),
         WizardQuestion(
@@ -95,12 +97,14 @@ object SetupWizard {
         ),
         WizardQuestion(
             id = "emoji",
-            prompt = "表情和感叹号呢？",
+            prompt = "表情和感叹号，你用哪个？",
             kind = QuestionKind.SINGLE,
+            hint = "这两个是分开的：有人爱发表情但从不用感叹号",
             options = listOf(
-                WizardOption("none", "基本不用"),
-                WizardOption("some", "偶尔用一个"),
-                WizardOption("lots", "挺爱用的"),
+                WizardOption("none", "都不用"),
+                WizardOption("emoji", "只发表情，不用感叹号"),
+                WizardOption("mark", "只用感叹号，不发表情"),
+                WizardOption("both", "两个都用"),
             ),
         ),
         WizardQuestion(
@@ -153,9 +157,10 @@ object SetupWizard {
             id = "only_for",
             prompt = "先只对哪几个人开？",
             kind = QuestionKind.TEXT,
-            hint = "填微信备注名，多个用逗号隔开。强烈建议先填三五个熟人",
+            hint = "强烈建议先填三五个熟人。留空 = 对所有人开，风险高很多",
             optional = true,
-            placeholder = "留空 = 对所有人开（风险高很多）",
+            placeholder = "填你在微信里看到的名字：设了备注就填备注名，" +
+                "没设就填昵称，不是微信号。答完在设置页里还能直接勾选。",
         ),
     )
 
@@ -273,19 +278,32 @@ object SetupWizard {
     )
 
     private val BUSY_LINE = mapOf(
-        "work" to "我白天要上班，手机不太方便看",
-        "hands" to "我平时手上都忙着事，腾不开",
-        "out" to "我经常在外面、在路上",
-        "later" to "我消息看得到，但常常想晚点再回",
+        "work" to "白天要上班，手机不太方便看",
+        "hands" to "手上常忙着别的事，腾不开",
+        "out" to "经常在外面、在路上",
+        "later" to "消息看得到，但常常不太想马上回",
+        "unsure" to "有些消息我得想想怎么回，就先放着了",
     )
+
+    // 兜底文案只用一条理由，多选时取第一条
+    private val BUSY_ORDER = listOf("work", "hands", "out", "later", "unsure")
 
     private val MAX_CHARS = mapOf("short" to 20, "medium" to 45, "varies" to 30)
 
+    // 表情和感叹号是两回事：有人爱发表情但从不用感叹号。
+    // 之前把它们混成一个「用不用」的程度问题，是设计错误。
     private val EMOJI_LINE = mapOf(
-        "none" to "不用感叹号，不发表情。",
-        "some" to "偶尔用一个感叹号或者表情，别多。",
-        "lots" to "可以用感叹号和常见表情，别过头。",
+        "none" to "不用感叹号，也不发表情。",
+        "emoji" to "会发表情，但不用感叹号。",
+        "mark" to "会用感叹号，但基本不发表情。",
+        "both" to "感叹号和表情都会用，但别过头。",
     )
+
+    // 旧版本存下来的答案，映射到新选项上，免得重装一次人设就变了
+    private val EMOJI_LEGACY = mapOf("some" to "emoji", "lots" to "both")
+
+    private fun usesExclaim(emoji: String) = emoji == "mark" || emoji == "both"
+    private fun usesEmoji(emoji: String) = emoji == "emoji" || emoji == "both"
 
     // ------------------------------------------------------------ 拼装
 
@@ -302,9 +320,16 @@ object SetupWizard {
 
         val style = one("style", "casual").takeIf { VOICE.containsKey(it) } ?: "casual"
         val voice = VOICE.getValue(style)
-        val busy = one("busy", "hands")
+        // busy 是多选：「在上班」和「不知道怎么回」可以同时成立
+        val busyIds = (answers["busy"] ?: emptyList())
+            .filter { BUSY_LINE.containsKey(it) }
+            .ifEmpty { listOf("hands") }
+
         val length = one("length", "varies")
-        val emoji = one("emoji", "none")
+
+        val emojiRaw = one("emoji", "none")
+        val emoji = (EMOJI_LEGACY[emojiRaw] ?: emojiRaw)
+            .takeIf { EMOJI_LINE.containsKey(it) } ?: "none"
         val appointment = APPOINTMENT[one("appointment", "hold")] ?: APPOINTMENT.getValue("hold")
         val progress = PROGRESS[one("progress", "rough")] ?: PROGRESS.getValue("rough")
         val stranger = STRANGER[one("stranger", "polite")] ?: STRANGER.getValue("polite")
@@ -318,8 +343,9 @@ object SetupWizard {
             if (labels.isNotEmpty()) {
                 append("平时给我发消息的主要是${labels.joinToString("、")}。")
             }
-            append(BUSY_LINE[busy] ?: BUSY_LINE.getValue("hands"))
-            append("，微信经常隔一会儿才翻一次，看到会回。")
+            append("我" + BUSY_ORDER.filter { it in busyIds }
+                .joinToString("；") { BUSY_LINE.getValue(it) } + "。")
+            append("微信经常隔一会儿才翻一次，看到会回。")
         }
 
         // ---- 我说话的方式 ----
@@ -343,7 +369,16 @@ object SetupWizard {
             "纯闲聊、发表情、分享链接：随便接一两句，别太热情也别冷场。",
             "看不懂对方在说什么，或者事情比较重要：直接说等我本人回你，" +
                 "不要硬猜着接话。",
-        ).joinToString("\n")
+        ).toMutableList().apply {
+            if ("unsure" in busyIds) {
+                // 用户自己说了「有些消息不知道怎么回」——那就把模型也调保守些，
+                // 拿不准时先拖住，别替他现编一个答案
+                add(
+                    "凡是拿不准该怎么回的：宁可先拖着，说等我本人回你，" +
+                        "绝对不要自己编一个答案。"
+                )
+            }
+        }.joinToString("\n")
 
         val boundaries = splitList(answers["never"]?.firstOrNull().orEmpty())
 
@@ -357,7 +392,12 @@ object SetupWizard {
             AiExample("在吗", greeting),
             AiExample("明天下午有空不，一起吃个饭", say(appointment)),
             AiExample("那个东西弄得怎么样了", say(progress)),
-            AiExample("哈哈哈哈太逗了", tune(voice.getValue("chat"), emoji)),
+            // 爱发表情的人，示范里也得有表情——不然示范和语气说明打架，
+            // 模型会照着示范走
+            AiExample(
+                "哈哈哈哈太逗了",
+                tune(voice.getValue("chat"), emoji) + if (usesEmoji(emoji)) "😂" else "",
+            ),
         )
 
         // ---- 关键词规则（给不用 AI 的人）----
@@ -386,7 +426,7 @@ object SetupWizard {
             ),
         )
 
-        val busyText = BUSY_LINE[busy] ?: BUSY_LINE.getValue("hands")
+        val busyText = "我" + BUSY_LINE.getValue(BUSY_ORDER.first { it in busyIds })
         val fallbackText = when (style) {
             "polite" -> "$busyText，看到会尽快回复您"
             "brief" -> "$busyText，晚点回"
@@ -422,7 +462,7 @@ object SetupWizard {
      * 示范和语气说明自相矛盾时，模型会照着示范走——示范的分量更重。
      */
     private fun tune(text: String, emoji: String): String =
-        if (emoji == "none") text.replace("！", "").replace("!", "") else text
+        if (usesExclaim(emoji)) text else text.replace("！", "").replace("!", "")
 
     /** 中英文逗号、顿号、换行都当分隔符——用户不该被要求分清全角半角。 */
     private fun splitList(raw: String): List<String> =

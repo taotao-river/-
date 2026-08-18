@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .config import Config
-from .models import IncomingMessage, ReplyDecision, chat_identity
+from .models import IncomingMessage, ReplyDecision, chat_identity, normalize_chat_name
 
 logger = logging.getLogger(__name__)
 
@@ -99,14 +99,19 @@ class ReplyEngine:
         if blocked:
             return ReplyDecision.skip(f"命中硬性敏感词 {blocked!r}，人工处理")
 
-        if message.chat_name in cfg.scope.block_contacts:
+        # 归一化后比对：用户手打的名字常有多余空格或大小写差异，
+        # 而比对失败是静默的——名单形同虚设，用户还不知道
+        name = normalize_chat_name(message.chat_name)
+        if name in {normalize_chat_name(c) for c in cfg.scope.block_contacts}:
             return ReplyDecision.skip(f"{message.chat_name} 在黑名单里")
 
         soft_blocked = next((k for k in cfg.scope.block_keywords if k in message.text), None)
         if soft_blocked:
             return ReplyDecision.skip(f"命中自定义屏蔽词 {soft_blocked!r}")
 
-        if cfg.scope.allow_contacts and message.chat_name not in cfg.scope.allow_contacts:
+        if cfg.scope.allow_contacts and name not in {
+            normalize_chat_name(c) for c in cfg.scope.allow_contacts
+        }:
             return ReplyDecision.skip(f"{message.chat_name} 不在白名单里")
 
         # ---- 会话类型 ----

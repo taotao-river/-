@@ -55,7 +55,10 @@ class ReplyEngine(
             return Decision.skip("含敏感词「$it」，交给你本人处理")
         }
 
-        if (config.blockContacts.any { it.isNotBlank() && it == message.chatName }) {
+        // 归一化后比对：用户手打的名字常有多余空格或大小写差异，
+        // 而比对失败是静默的——名单形同虚设，用户还不知道
+        val name = normalizeChatName(message.chatName)
+        if (config.blockContacts.any { normalizeChatName(it) == name }) {
             return Decision.skip("${message.chatName} 在不回复名单里")
         }
 
@@ -64,7 +67,7 @@ class ReplyEngine(
         }
 
         val allow = config.allowContacts.filter { it.isNotBlank() }
-        if (allow.isNotEmpty() && message.chatName !in allow) {
+        if (allow.isNotEmpty() && allow.none { normalizeChatName(it) == name }) {
             return Decision.skip("${message.chatName} 不在指定名单里")
         }
 
@@ -130,10 +133,7 @@ class ReplyEngine(
      * 群名后面的成员数会变，不能算进身份。
      */
     private fun identityOf(message: Message): String {
-        val name = message.chatName
-            .replace(Regex("""[（(]\s*\d+\s*[)）]\s*$"""), "")
-            .trim()
-            .lowercase()
+        val name = normalizeChatName(message.chatName)
         return if (message.isGroup) "group:$name" else "private:$name"
     }
 

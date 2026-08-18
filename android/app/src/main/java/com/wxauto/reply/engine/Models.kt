@@ -16,6 +16,20 @@ data class Message(
     val mentionedMe: Boolean = false,
 )
 
+private val MEMBER_COUNT = Regex("""[（(]\s*\d+\s*[)）]\s*$""")
+
+/**
+ * 归一化会话名，用于和用户填的名单比对。
+ *
+ * 用户手打名字时很容易多个空格、大小写不一致；而这里比对失败的后果是
+ * 「名单里的人收不到回复」或者「名单外的人收到了」——两种都很糟，
+ * 而且都不会报错，用户只会觉得程序坏了。所以比对前统一归一化。
+ *
+ * 刻意不做模糊匹配（比如包含关系）：那会把「小王他哥」也算成「小王」。
+ */
+fun normalizeChatName(name: String): String =
+    MEMBER_COUNT.replace(name, "").trim().lowercase()
+
 data class Decision(
     val shouldReply: Boolean,
     val reason: String,

@@ -196,6 +196,20 @@ echo
 read -n 1 -s -r -p "按任意键关闭..."
 EOF
 
+cat > "查看联系人名字.command" <<EOF
+#!/bin/bash
+cd "\$(dirname "\$0")"
+clear
+echo "=========================================================="
+echo "  列出程序看到的会话名"
+echo "  白名单（只对这几个人自动回复）就填这里的名字，照抄即可"
+echo "  这一步只看不动：不读消息，也不发消息"
+echo "=========================================================="
+"$REPO_DIR/.venv/bin/python" macos/wechat_mac_bot.py --contacts
+echo
+read -n 1 -s -r -p "按任意键关闭..."
+EOF
+
 cat > "2 试运行（不真发消息）.command" <<EOF
 #!/bin/bash
 cd "\$(dirname "\$0")"
@@ -228,7 +242,8 @@ echo
 exec caffeinate -i "$REPO_DIR/.venv/bin/python" macos/wechat_mac_bot.py
 EOF
 
-chmod +x "1 检查微信.command" "2 试运行（不真发消息）.command" "3 开始自动回复.command"
+chmod +x "1 检查微信.command" "2 试运行（不真发消息）.command" \
+        "3 开始自动回复.command" "查看联系人名字.command"
 echo "      好了"
 
 # ---------------------------------------------------------- 授权引导

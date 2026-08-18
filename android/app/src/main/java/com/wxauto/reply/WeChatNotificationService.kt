@@ -91,6 +91,11 @@ class WeChatNotificationService : NotificationListenerService() {
         text: String,
         isGroup: Boolean,
     ) {
+        // 记下这个会话名，供设置页的白名单勾选用。
+        // 放在配置判断之前：即使当前不回复，也该知道「谁给你发过消息」，
+        // 否则用户第一次进设置页会看到一个空列表。
+        Storage.rememberSeenChat(this, chatName)
+
         // 每次都重新读配置：用户在界面上改完或用快捷开关关掉，立刻生效
         val config = Storage.loadConfig(this)
 

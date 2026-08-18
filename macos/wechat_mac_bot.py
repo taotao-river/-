@@ -343,6 +343,69 @@ def tick(engine: EngineClient, dry_run: bool) -> None:
             logger.info("  已发送")
 
 
+_LIST_CONTACTS = """
+tell application "System Events"
+    if not (exists process "WeChat") then return "ERR:微信没在运行"
+    tell process "WeChat"
+        if (count of windows) = 0 then return "ERR:微信没有打开的窗口"
+        set out to ""
+        try
+            set convRows to rows of table 1 of scroll area 1 of splitter group 1 of window 1
+        on error
+            return "ERR:读不到会话列表，先跑 --doctor 看看"
+        end try
+        repeat with r in convRows
+            try
+                set labels to value of static texts of UI element 1 of r
+                set out to out & (item 1 of labels) & "\\n"
+            end try
+        end repeat
+        return out
+    end tell
+end tell
+"""
+
+
+def contacts() -> int:
+    """列出会话列表里的名字。
+
+    白名单要填名字，但「填哪个名字」本身就不好回答——微信号？昵称？备注？
+    答案是：程序看到的就是会话列表里显示的那个（有备注就是备注名）。
+    与其让用户猜，不如直接把程序看到的原样打出来，照抄即可。
+    """
+    print()
+    print("=" * 56)
+    print("  最近的会话（白名单就填这里的名字，照抄即可）")
+    print("=" * 56)
+    print()
+
+    output = run_applescript(_LIST_CONTACTS)
+    if output.startswith("ERR:"):
+        print(f"  {output[4:]}")
+        return 1
+
+    names = [n.strip() for n in output.splitlines() if n.strip()]
+    if not names:
+        print("  一个会话都没读到。先确认微信开着，或者跑 --doctor 排查。")
+        return 1
+
+    for name in names:
+        print(f"    {name}")
+
+    print()
+    print("  用法：把想自动回复的人抄进 core/config.yaml 的 scope.allow_contacts：")
+    print()
+    print("    scope:")
+    print("      allow_contacts:")
+    for name in names[:2]:
+        print(f'        - "{name}"')
+    print()
+    print("  填了之后，只有名单里的人会收到自动回复，其他人一律不回。")
+    print("  多余的空格和大小写不影响匹配。")
+    print()
+    return 0
+
+
 def doctor() -> int:
     """把微信的界面结构打出来。
 
@@ -388,11 +451,18 @@ def main() -> int:
         help="打印微信界面结构，用来排查「读不到会话」这类问题",
     )
     parser.add_argument("--once", action="store_true", help="只扫一轮就退出")
+    parser.add_argument(
+        "--contacts",
+        action="store_true",
+        help="列出会话列表里的名字，用来填白名单（allow_contacts）",
+    )
     args = parser.parse_args()
 
-    # 诊断不需要连规则服务，也不需要 token
+    # 诊断和列联系人都不需要连规则服务，也不需要 token
     if args.doctor:
         return doctor()
+    if args.contacts:
+        return contacts()
 
     token = os.environ.get("WXAUTO_TOKEN", "")
     if not token:

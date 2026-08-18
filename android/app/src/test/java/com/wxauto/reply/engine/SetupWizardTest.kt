@@ -170,7 +170,7 @@ class SetupWizardTest {
     @Test
     fun exclamationKeptWhenUserLikesThem() {
         val result = SetupWizard.build(
-            answers("style" to listOf("warm"), "emoji" to listOf("lots"))
+            answers("style" to listOf("warm"), "emoji" to listOf("both"))
         )
         assertTrue(result.persona.examples.any { it.me.contains("！") })
     }
@@ -349,5 +349,90 @@ class SetupWizardTest {
         assertTrue(inside.shouldReply)
         assertFalse(outside.shouldReply)
         assertTrue(outside.reason, outside.reason.contains("名单"))
+    }
+
+    // ------------------------------------------------------------ 表情 ≠ 感叹号
+
+    @Test
+    fun emojiAndExclamationAreIndependent() {
+        // 有人爱发表情但从不用感叹号。原来把两者混成一个「用不用」的
+        // 程度问题，是设计错误：选「偶尔用」的人没法表达「只发表情」。
+        val onlyEmoji = SetupWizard.build(
+            answers("style" to listOf("warm"), "emoji" to listOf("emoji"))
+        )
+        val onlyMark = SetupWizard.build(
+            answers("style" to listOf("warm"), "emoji" to listOf("mark"))
+        )
+
+        assertTrue(onlyEmoji.persona.examples.none { it.me.contains("！") })
+        assertTrue(onlyEmoji.persona.examples.any { it.me.contains("😂") })
+
+        assertTrue(onlyMark.persona.examples.any { it.me.contains("！") })
+        assertTrue(onlyMark.persona.examples.none { it.me.contains("😂") })
+    }
+
+    @Test
+    fun legacyEmojiAnswersStillWork() {
+        // 旧版本存的答案不该让人设变样——重装一次语气就变了很怪
+        assertEquals(
+            SetupWizard.build(answers("emoji" to listOf("emoji"))).persona.tone,
+            SetupWizard.build(answers("emoji" to listOf("some"))).persona.tone,
+        )
+        assertEquals(
+            SetupWizard.build(answers("emoji" to listOf("both"))).persona.tone,
+            SetupWizard.build(answers("emoji" to listOf("lots"))).persona.tone,
+        )
+    }
+
+    // ------------------------------------------------------------ 没马上回的理由
+
+    @Test
+    fun busyAcceptsSeveralReasons() {
+        // 「在上班」和「不知道怎么回」可以同时成立，原来只能选一个
+        val result = SetupWizard.build(answers("busy" to listOf("work", "unsure")))
+        assertTrue(result.persona.identity.contains("上班"))
+        assertTrue(result.persona.identity.contains("想想怎么回"))
+    }
+
+    @Test
+    fun unsureMakesThePlaybookMoreCareful() {
+        // 用户自己说了「有些消息不知道怎么回」，模型就该跟着保守
+        val careful = SetupWizard.build(answers("busy" to listOf("unsure")))
+        val plain = SetupWizard.build(answers("busy" to listOf("work")))
+        assertTrue(careful.persona.playbook.contains("绝对不要自己编一个答案"))
+        assertFalse(plain.persona.playbook.contains("绝对不要自己编一个答案"))
+    }
+
+    @Test
+    fun unknownBusyFallsBack() {
+        val result = SetupWizard.build(answers("busy" to listOf("乱写")))
+        assertTrue(result.persona.identity.isNotBlank())
+        assertTrue(result.fallbackText.isNotBlank())
+    }
+
+    // ------------------------------------------------------------ 名单比对
+
+    @Test
+    fun whitelistToleratesSpacingAndCase() {
+        // 用户手打名字常有多余空格。比对失败是静默的，最难查。
+        val config = SetupWizard.applyTo(
+            EngineConfig(enabled = true, signature = "", minIntervalSeconds = 0),
+            SetupWizard.build(answers("only_for" to listOf("  小王 "))),
+        )
+        val d = ReplyEngine(InMemoryStateStore())
+            .decide(config, Message(chatId = "x", chatName = "小王", text = "在吗"))
+        assertTrue(d.reason, d.shouldReply)
+    }
+
+    @Test
+    fun whitelistDoesNotDoFuzzyMatching() {
+        // 「小王他哥」不该被当成「小王」——那会让名单形同虚设
+        val config = SetupWizard.applyTo(
+            EngineConfig(enabled = true, signature = "", minIntervalSeconds = 0),
+            SetupWizard.build(answers("only_for" to listOf("小王"))),
+        )
+        val d = ReplyEngine(InMemoryStateStore())
+            .decide(config, Message(chatId = "x", chatName = "小王他哥", text = "在吗"))
+        assertFalse(d.shouldReply)
     }
 }

@@ -216,6 +216,36 @@ object Storage {
         return (0 until length()).mapNotNull { optString(it).takeIf { s -> s.isNotBlank() } }
     }
 
+    // ------------------------------------------------------------------ 最近联系人
+
+    private const val KEY_SEEN = "seen_chats_json"
+    private const val MAX_SEEN = 60
+
+    /**
+     * 记下最近有消息进来的会话名。
+     *
+     * 为什么需要：白名单要用户填名字，但「填哪个名字」本身就不好回答——
+     * 微信号？昵称？备注？而第三方 App 读不到微信的通讯录（那是微信的
+     * 私有数据）。能拿到的只有「给你发过消息的人」，那恰好就够用了：
+     * 设置页把这些名字列成勾选框，用户点一下就行，不用打字也不会填错。
+     *
+     * 只存会话名，不存任何消息内容。
+     */
+    fun rememberSeenChat(context: Context, chatName: String) {
+        if (chatName.isBlank()) return
+        val seen = loadSeenChats(context).toMutableList()
+        // 已经有了就挪到最前面，保持「最近联系」的顺序
+        seen.removeAll { normalizeChatName(it) == normalizeChatName(chatName) }
+        seen.add(0, chatName)
+        while (seen.size > MAX_SEEN) seen.removeAt(seen.size - 1)
+        prefs(context).edit().putString(KEY_SEEN, JSONArray(seen).toString()).apply()
+    }
+
+    fun loadSeenChats(context: Context): List<String> {
+        val raw = prefs(context).getString(KEY_SEEN, null) ?: return emptyList()
+        return runCatching { JSONArray(raw).toStringList() }.getOrElse { emptyList() }
+    }
+
     // ------------------------------------------------------------------ 开场问答
 
     /** 答过一次就不再自动弹问答页。 */

@@ -29,6 +29,7 @@ import com.wxauto.reply.engine.EngineConfig
 import com.wxauto.reply.engine.GroupPolicy
 import com.wxauto.reply.engine.InMemoryStateStore
 import com.wxauto.reply.engine.Message
+import com.wxauto.reply.engine.normalizeChatName
 import com.wxauto.reply.engine.OpenAiCompatibleWriter
 import com.wxauto.reply.engine.PersonaConfig
 import com.wxauto.reply.engine.ReplyEngine
@@ -48,6 +49,7 @@ class MainActivity : Activity() {
     private lateinit var fallbackField: EditText
     private lateinit var blockContactsField: EditText
     private lateinit var allowContactsField: EditText
+    private lateinit var seenContactsContainer: LinearLayout
     private lateinit var rulesContainer: LinearLayout
     private lateinit var testInput: EditText
     private lateinit var testResult: TextView
@@ -219,14 +221,28 @@ class MainActivity : Activity() {
         // 放在黑名单前面，因为它才是真正管用的那条：
         // 会导致封号的主要路径是被举报，而熟人不会举报你。
         root.addView(section("只对这些人自动回复"))
+        root.addView(hint(
+            "勾上谁，就只有谁会收到自动回复，其他人一律不回。\n\n" +
+                "⚠️ 这是最有效的防封号手段。真正可能出事的是「被人举报」，" +
+                "而熟人不会举报你。强烈建议先勾三五个熟人跑几天，再考虑放开。"
+        ))
+
+        // 从「给你发过消息的人」里勾选。
+        // 读不到微信通讯录（那是微信的私有数据），但最近联系过的人
+        // 恰好就够用了——而且勾选比手打名字准得多。
+        seenContactsContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        root.addView(seenContactsContainer)
+
         allowContactsField = EditText(this).apply {
-            hint = "留空 = 对所有人开"
+            hint = "还没聊过的人，可以在这里手打名字，逗号隔开"
         }
         root.addView(allowContactsField)
         root.addView(hint(
-            "填了名字之后，只有名单里的人会收到自动回复，其他人一律不回。\n\n" +
-                "⚠️ 这是最有效的防封号手段。真正可能出事的是「被人举报」，" +
-                "而熟人不会举报你。强烈建议先填三五个熟人跑几天，确认没问题再放开。"
+            "手打的话，填你在微信里看到的那个名字——**设了备注就填备注名**，" +
+                "没设备注就填昵称。不是微信号。\n" +
+                "多余的空格和大小写不影响匹配。"
         ))
 
         root.addView(divider())
@@ -549,7 +565,7 @@ class MainActivity : Activity() {
         )
         fallbackField.setText(config.fallbackText)
         blockContactsField.setText(config.blockContacts.joinToString("，"))
-        allowContactsField.setText(config.allowContacts.joinToString("，"))
+        renderSeenContacts(config.allowContacts)
 
         rulesContainer.removeAllViews()
         val rules = config.rules.ifEmpty { listOf(Rule(name = "规则", replies = listOf(""))) }
@@ -622,7 +638,7 @@ class MainActivity : Activity() {
             rules = rules,
             fallbackText = fallbackField.text.toString().trim(),
             blockContacts = splitList(blockContactsField.text.toString()),
-            allowContacts = splitList(allowContactsField.text.toString()),
+            allowContacts = checkedSeenContacts() + splitList(allowContactsField.text.toString()),
             replyMode = if (modeGroup.checkedRadioButtonId == modeAiId)
                 ReplyMode.AI else ReplyMode.KEYWORD,
             ai = AiConfig(
@@ -711,6 +727,53 @@ class MainActivity : Activity() {
         testResult.setTextColor(Color.parseColor(color))
     }
 
+
+    /**
+     * 把「给你发过消息的人」列成勾选框。
+     *
+     * 第三方 App 读不到微信通讯录，那是微信的私有数据。但能拿到发过
+     * 消息的人，而这恰好就够用——白名单本来就只该填聊得上的人。
+     * 勾选比手打准得多：用户不用纠结填昵称还是备注，也不会打错字。
+     */
+    private fun renderSeenContacts(selected: List<String>) {
+        seenContactsContainer.removeAllViews()
+        val seen = Storage.loadSeenChats(this)
+        val picked = selected.map { normalizeChatName(it) }.toSet()
+
+        if (seen.isEmpty()) {
+            seenContactsContainer.addView(hint(
+                "还没人给你发过消息，所以这里是空的。\n" +
+                    "等收到几条微信之后再回来，这里会列出他们，勾选就行。"
+            ))
+        }
+
+        seen.forEach { name ->
+            seenContactsContainer.addView(CheckBox(this).apply {
+                text = name
+                textSize = 16f
+                tag = TAG_SEEN
+                isChecked = normalizeChatName(name) in picked
+                setPadding(dp(8), dp(10), dp(8), dp(10))
+            })
+        }
+
+        // 勾选框覆盖不到的名字（手打进来的、或者对方后来改了备注），
+        // 仍旧回填到输入框里，免得保存一次就丢了
+        val seenNorm = seen.map { normalizeChatName(it) }.toSet()
+        allowContactsField.setText(
+            selected.filter { normalizeChatName(it) !in seenNorm }.joinToString("，")
+        )
+    }
+
+    private fun checkedSeenContacts(): List<String> {
+        val out = ArrayList<String>()
+        for (i in 0 until seenContactsContainer.childCount) {
+            val box = seenContactsContainer.getChildAt(i) as? CheckBox ?: continue
+            if (box.tag == TAG_SEEN && box.isChecked) out += box.text.toString()
+        }
+        return out
+    }
+
     /** 中英文逗号都当分隔符——用户不该被要求分清全角半角。 */
     private fun splitList(raw: String): List<String> =
         raw.split(",", "，", "、")
@@ -795,5 +858,6 @@ class MainActivity : Activity() {
         private const val TAG_REPLY = "rp"
         private const val TAG_EX_THEM = "ex_them"
         private const val TAG_EX_ME = "ex_me"
+        private const val TAG_SEEN = "seen"
     }
 }

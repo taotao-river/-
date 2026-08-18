@@ -24,7 +24,7 @@ from core.wizard import (
 def answers(**overrides):
     base = {
         "who": ["work", "friend"],
-        "busy": "hands",
+        "busy": ["hands"],
         "style": "casual",
         "length": "varies",
         "emoji": "none",
@@ -296,3 +296,99 @@ def test_whitelist_actually_blocks_outsiders():
     assert inside.should_reply
     assert not outside.should_reply
     assert "白名单" in outside.reason
+
+
+# ------------------------------------------------------------ 表情 ≠ 感叹号
+
+
+def test_emoji_and_exclamation_are_independent():
+    """有人爱发表情但从不用感叹号。
+
+    原来把两者混成一个「用不用」的程度问题，是设计错误：
+    选「偶尔用」的人没法表达「只发表情」。
+    """
+    only_emoji = build_result(answers(style="warm", emoji="emoji"))
+    only_mark = build_result(answers(style="warm", emoji="mark"))
+
+    # 只发表情 → 示范里有表情、没有感叹号
+    assert all("！" not in e["me"] for e in only_emoji.examples)
+    assert any("😂" in e["me"] for e in only_emoji.examples)
+
+    # 只用感叹号 → 反过来
+    assert any("！" in e["me"] for e in only_mark.examples)
+    assert all("😂" not in e["me"] for e in only_mark.examples)
+
+
+def test_emoji_choice_is_described_in_tone():
+    assert "会发表情" in build_result(answers(emoji="emoji")).tone
+    assert "会用感叹号" in build_result(answers(emoji="mark")).tone
+    assert "都不用" not in build_result(answers(emoji="both")).tone
+
+
+def test_legacy_emoji_answers_still_work():
+    """旧版本存的答案不该让人设变样——重装一次语气就变了很怪。"""
+    assert build_result(answers(emoji="some")).tone == build_result(
+        answers(emoji="emoji")
+    ).tone
+    assert build_result(answers(emoji="lots")).tone == build_result(
+        answers(emoji="both")
+    ).tone
+
+
+# ------------------------------------------------------------ 没马上回的理由
+
+
+def test_busy_accepts_several_reasons():
+    """「在上班」和「不知道怎么回」可以同时成立，原来只能选一个。"""
+    result = build_result(answers(busy=["work", "unsure"]))
+    assert "上班" in result.identity
+    assert "想想怎么回" in result.identity
+
+
+def test_unsure_makes_the_playbook_more_careful():
+    """用户自己说了「有些消息不知道怎么回」，模型就该跟着保守。"""
+    careful = build_result(answers(busy=["unsure"]))
+    plain = build_result(answers(busy=["work"]))
+    assert "绝对不要自己编一个答案" in careful.playbook
+    assert "绝对不要自己编一个答案" not in plain.playbook
+
+
+def test_legacy_single_busy_answer_still_works():
+    result = build_result(answers(busy="work"))
+    assert "上班" in result.identity
+    assert result.fallback_text
+
+
+def test_unknown_busy_falls_back():
+    result = build_result(answers(busy=["乱写"]))
+    assert result.identity.strip()
+    assert result.fallback_text.strip()
+
+
+# ------------------------------------------------------------ 名单比对
+
+
+def test_whitelist_tolerates_spacing_and_case():
+    """用户手打名字常有多余空格。比对失败是静默的，最难查。"""
+    from core.engine import ReplyEngine
+    from core.models import IncomingMessage
+
+    data = yaml.safe_load(to_yaml(build_result(answers(only_for="  小王 "))))
+    data["active_hours"] = []
+    engine = ReplyEngine(build_config(data))
+
+    d = engine.decide(IncomingMessage(chat_id="x", chat_name="小王", text="在吗"))
+    assert d.should_reply, d.reason
+
+
+def test_whitelist_does_not_do_fuzzy_matching():
+    """「小王他哥」不该被当成「小王」——那会让名单形同虚设。"""
+    from core.engine import ReplyEngine
+    from core.models import IncomingMessage
+
+    data = yaml.safe_load(to_yaml(build_result(answers(only_for="小王"))))
+    data["active_hours"] = []
+    engine = ReplyEngine(build_config(data))
+
+    d = engine.decide(IncomingMessage(chat_id="x", chat_name="小王他哥", text="在吗"))
+    assert not d.should_reply
