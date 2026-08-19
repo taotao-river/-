@@ -169,6 +169,18 @@ class MainActivity : Activity() {
 
         root.addView(hint("在打开的页面里找到「微信自动回复」并打开。不给这个权限，程序看不到微信消息。"))
 
+        // 覆盖安装之后，系统经常把已经授权的通知监听服务停掉不再重连，
+        // 表现就是「权限明明开着，但一条消息都收不到」。
+        // 官方给的补救办法就是 requestRebind，不用让用户去手动关了再开。
+        root.addView(Button(this).apply {
+            text = "收不到消息？点这里重连"
+            setOnClickListener { requestListenerRebind() }
+        })
+        root.addView(hint(
+            "刚更新过 App、或者手机重启过之后，系统有时会把监听停掉。" +
+                "下面「最近发生了什么」一直是空的，就点一下这个。"
+        ))
+
         root.addView(divider())
 
         // ---- 运行记录 ----
@@ -808,6 +820,29 @@ class MainActivity : Activity() {
         return out
     }
 
+
+
+    /**
+     * 请求系统重新绑定通知监听服务。
+     *
+     * 覆盖安装 APK、或者手机重启之后，系统经常不会自动把已经授权的
+     * 监听服务重新拉起来。表现是「权限明明是开着的，但一条消息都收不到」，
+     * 而且完全没有任何提示——用户只能看到 App 毫无反应。
+     *
+     * requestRebind 是官方给的补救接口，省得让用户去系统设置里
+     * 手动把开关关掉再打开。
+     */
+    private fun requestListenerRebind() {
+        if (!isNotificationAccessGranted()) {
+            Toast.makeText(this, "还没授予通知使用权，先点上面那个按钮", Toast.LENGTH_LONG).show()
+            return
+        }
+        android.service.notification.NotificationListenerService.requestRebind(
+            android.content.ComponentName(this, WeChatNotificationService::class.java)
+        )
+        Toast.makeText(this, "已请求重连，等几秒再看下面的记录", Toast.LENGTH_LONG).show()
+        eventsView.postDelayed({ refreshEvents() }, 3000)
+    }
 
     /**
      * 把运行记录显示出来。
