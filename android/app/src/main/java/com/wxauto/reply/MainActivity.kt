@@ -113,7 +113,12 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        // 从系统设置页返回时刷新授权状态
+        // 授权了但服务没连上就自己修一次。这个状态多半是覆盖安装
+        // 或者重启造成的，用户完全看不出来，不该让他自己去点按钮。
+        if (isNotificationAccessGranted() && !Storage.isListenerConnected(this)) {
+            requestListenerRebind(quiet = true)
+        }
+
         refreshPermissionStatus()
         refreshEvents()
 
@@ -832,16 +837,24 @@ class MainActivity : Activity() {
      * requestRebind 是官方给的补救接口，省得让用户去系统设置里
      * 手动把开关关掉再打开。
      */
-    private fun requestListenerRebind() {
+    private fun requestListenerRebind(quiet: Boolean = false) {
         if (!isNotificationAccessGranted()) {
-            Toast.makeText(this, "还没授予通知使用权，先点上面那个按钮", Toast.LENGTH_LONG).show()
+            if (!quiet) {
+                Toast.makeText(this, "还没授予通知使用权，先点上面那个按钮", Toast.LENGTH_LONG).show()
+            }
             return
         }
         android.service.notification.NotificationListenerService.requestRebind(
             android.content.ComponentName(this, WeChatNotificationService::class.java)
         )
-        Toast.makeText(this, "已请求重连，等几秒再看下面的记录", Toast.LENGTH_LONG).show()
-        eventsView.postDelayed({ refreshEvents() }, 3000)
+        if (!quiet) {
+            Toast.makeText(this, "已请求重连，等几秒再看下面的记录", Toast.LENGTH_LONG).show()
+        }
+        // 绑定是异步的，过几秒再刷新才看得到结果
+        eventsView.postDelayed({
+            refreshPermissionStatus()
+            refreshEvents()
+        }, 3000)
     }
 
     /**
@@ -881,8 +894,15 @@ class MainActivity : Activity() {
         val granted = isNotificationAccessGranted()
         val enabled = Storage.loadConfig(this).enabled
 
+        // 授权 ≠ 服务活着。只查授权就说「正在工作中」，在监听已经死掉的
+        // 情况下等于骗用户——他会以为程序在跑，实际一条消息都收不到。
+        val connected = Storage.isListenerConnected(this)
+
         val (text, color) = when {
             !granted -> "⚠️ 还没授予通知使用权，现在不会自动回复" to Color.parseColor("#D32F2F")
+            !connected ->
+                "⚠️ 权限有了，但监听没连上，现在收不到消息 —— 点下面的「重连」" to
+                    Color.parseColor("#EF6C00")
             !enabled -> "已授权。开关打开后开始工作。" to Color.parseColor("#757575")
             else -> "✅ 正在工作中" to Color.parseColor("#2E7D32")
         }

@@ -216,6 +216,25 @@ object Storage {
         return (0 until length()).mapNotNull { optString(it).takeIf { s -> s.isNotBlank() } }
     }
 
+    // ------------------------------------------------------------------ 连接状态
+
+    private const val KEY_CONNECTED = "listener_connected"
+
+    /**
+     * 监听服务是不是真的连上了。
+     *
+     * 为什么要单独存一个：系统设置里的那个开关只表示「用户授权过」，
+     * 不表示「服务现在活着」。覆盖安装或重启之后，权限还开着但服务
+     * 已经死了是很常见的情况。只查权限就显示「正在工作中」，
+     * 是在骗用户——他会以为程序在跑，实际上一条消息都收不到。
+     */
+    fun setListenerConnected(context: Context, connected: Boolean) {
+        prefs(context).edit().putBoolean(KEY_CONNECTED, connected).apply()
+    }
+
+    fun isListenerConnected(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_CONNECTED, false)
+
     // ------------------------------------------------------------------ 运行记录
 
     private const val KEY_EVENTS = "events_json"

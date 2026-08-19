@@ -49,11 +49,13 @@ class WeChatNotificationService : NotificationListenerService() {
      */
     override fun onListenerConnected() {
         super.onListenerConnected()
+        Storage.setListenerConnected(this, true)
         Storage.recordEvent(this, "已连接上通知，开始监听微信消息")
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        Storage.setListenerConnected(this, false)
         Storage.recordEvent(this, "通知监听断开了（可能被系统省电策略杀掉）")
     }
 
@@ -63,6 +65,11 @@ class WeChatNotificationService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        // 收到任何一条通知（不限微信）都说明监听是活的。
+        // 光靠 onListenerConnected 不够保险：个别 ROM 上它不一定回调，
+        // 那样界面会一直显示「监听没连上」，反过来又是在误导用户。
+        if (!Storage.isListenerConnected(this)) Storage.setListenerConnected(this, true)
+
         if (sbn.packageName != WECHAT_PACKAGE) return
 
         val notification = sbn.notification ?: return
