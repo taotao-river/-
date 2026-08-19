@@ -40,6 +40,23 @@ class WeChatNotificationService : NotificationListenerService() {
         engines = EngineHolder(this)
     }
 
+    /**
+     * 系统真正把通知流接给我们时才会回调这个。
+     *
+     * 记一笔是为了区分两种「没反应」：服务压根没连上（权限没给、
+     * 或者被系统杀了），还是连上了但每条消息都被判断为不回。
+     * 这两种的排查方向完全不同。
+     */
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        Storage.recordEvent(this, "已连接上通知，开始监听微信消息")
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        Storage.recordEvent(this, "通知监听断开了（可能被系统省电策略杀掉）")
+    }
+
     override fun onDestroy() {
         executor.shutdown()
         super.onDestroy()
@@ -56,10 +73,32 @@ class WeChatNotificationService : NotificationListenerService() {
 
         val chatName = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         val rawText = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
-        if (chatName.isEmpty() || rawText.isEmpty()) return
+        if (chatName.isEmpty()) {
+            Storage.recordEvent(this, "收到一条微信通知，但读不到是谁发的")
+            return
+        }
+
+        // 先记下会话名，再判断能不能回。
+        //
+        // 这行原来在 handle() 里，而 handle() 只有在找得到回复入口时才会执行——
+        // 于是在 ROM 剥掉 RemoteInput 的机器上，不但不回复，连白名单列表都
+        // 一直是空的，用户会以为「程序根本没收到消息」。两个症状同一个原因。
+        Storage.rememberSeenChat(this, chatName)
+
+        if (rawText.isEmpty()) {
+            Storage.recordEvent(
+                this,
+                "「$chatName」读不到消息内容 —— 多半是微信里关了「显示消息详情」",
+            )
+            return
+        }
 
         val replyAction = findReplyAction(notification)
         if (replyAction == null) {
+            Storage.recordEvent(
+                this,
+                "「$chatName」这条通知没有「回复」按钮，没法回。可以试试开无障碍兜底",
+            )
             Log.i(TAG, "「$chatName」的通知没有回复入口，跳过")
             return
         }
@@ -91,11 +130,6 @@ class WeChatNotificationService : NotificationListenerService() {
         text: String,
         isGroup: Boolean,
     ) {
-        // 记下这个会话名，供设置页的白名单勾选用。
-        // 放在配置判断之前：即使当前不回复，也该知道「谁给你发过消息」，
-        // 否则用户第一次进设置页会看到一个空列表。
-        Storage.rememberSeenChat(this, chatName)
-
         // 每次都重新读配置：用户在界面上改完或用快捷开关关掉，立刻生效
         val config = Storage.loadConfig(this)
 
@@ -115,6 +149,9 @@ class WeChatNotificationService : NotificationListenerService() {
         )
 
         if (!decision.shouldReply || decision.text == null) {
+            // 把原因记下来给用户看。不记的话，「为什么不回」在手机上
+            // 是完全查不到的——用户只能看到「没反应」。
+            Storage.recordEvent(this, "「$chatName」不回复：${decision.reason}")
             Log.i(TAG, "不回复「$chatName」：${decision.reason}")
             return
         }
@@ -130,11 +167,13 @@ class WeChatNotificationService : NotificationListenerService() {
 
         // 延迟期间用户可能把开关关了，发之前再确认一次
         if (!Storage.loadConfig(this).enabled) {
+            Storage.recordEvent(this, "「$chatName」等待期间开关被关掉了，没发")
             Log.i(TAG, "等待期间开关被关闭，放弃回复「$chatName」")
             return
         }
 
         sendReply(action, decision.text)
+        Storage.recordEvent(this, "已回复「$chatName」：${decision.text}")
         Log.i(TAG, "已回复「$chatName」：${decision.text}")
     }
 

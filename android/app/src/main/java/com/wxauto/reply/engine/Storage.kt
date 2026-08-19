@@ -216,6 +216,38 @@ object Storage {
         return (0 until length()).mapNotNull { optString(it).takeIf { s -> s.isNotBlank() } }
     }
 
+    // ------------------------------------------------------------------ 运行记录
+
+    private const val KEY_EVENTS = "events_json"
+    private const val MAX_EVENTS = 40
+
+    /**
+     * 记一条「刚才发生了什么」。
+     *
+     * 为什么需要：安卓端在手机上是个彻底的黑盒。不回复的时候用户看到的
+     * 只有「没反应」，而原因可能是没授权、没有回复按钮、被白名单挡了、
+     * 在冷却里、不在时段内……这些全都写在 logcat 里，而普通用户
+     * 一辈子也不会去看 logcat。
+     *
+     * 只记会话名和判断结果，不记消息内容。
+     */
+    fun recordEvent(context: Context, text: String) {
+        val stamp = java.time.LocalTime.now().withNano(0).toString()
+        val events = loadEvents(context).toMutableList()
+        events.add(0, "$stamp  $text")
+        while (events.size > MAX_EVENTS) events.removeAt(events.size - 1)
+        prefs(context).edit().putString(KEY_EVENTS, JSONArray(events).toString()).apply()
+    }
+
+    fun loadEvents(context: Context): List<String> {
+        val raw = prefs(context).getString(KEY_EVENTS, null) ?: return emptyList()
+        return runCatching { JSONArray(raw).toStringList() }.getOrElse { emptyList() }
+    }
+
+    fun clearEvents(context: Context) {
+        prefs(context).edit().remove(KEY_EVENTS).apply()
+    }
+
     // ------------------------------------------------------------------ 最近联系人
 
     private const val KEY_SEEN = "seen_chats_json"

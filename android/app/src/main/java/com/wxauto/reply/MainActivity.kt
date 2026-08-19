@@ -45,6 +45,7 @@ class MainActivity : Activity() {
 
     private lateinit var masterSwitch: Switch
     private lateinit var permissionStatus: TextView
+    private lateinit var eventsView: TextView
     private lateinit var groupPolicyGroup: RadioGroup
     private lateinit var fallbackField: EditText
     private lateinit var blockContactsField: EditText
@@ -114,6 +115,15 @@ class MainActivity : Activity() {
         super.onResume()
         // 从系统设置页返回时刷新授权状态
         refreshPermissionStatus()
+        refreshEvents()
+
+        // 刚有人发消息进来的话，白名单那份勾选列表要跟着长出来。
+        // 用界面上当前的选择重建，而不是用存盘的配置——否则用户还没保存的
+        // 修改会被这次刷新冲掉。
+        renderSeenContacts(
+            checkedSeenContacts() + splitList(allowContactsField.text.toString())
+        )
+
         masterSwitch.isChecked = Storage.loadConfig(this).enabled
     }
 
@@ -158,6 +168,30 @@ class MainActivity : Activity() {
         })
 
         root.addView(hint("在打开的页面里找到「微信自动回复」并打开。不给这个权限，程序看不到微信消息。"))
+
+        root.addView(divider())
+
+        // ---- 运行记录 ----
+        // 安卓端原来是个黑盒：不回复时用户只能看到「没反应」，
+        // 而原因全在 logcat 里——普通用户一辈子不会去看那个。
+        root.addView(section("最近发生了什么"))
+        root.addView(hint(
+            "程序每收到一条微信消息都会在这里记一笔，以及为什么回了或者没回。" +
+                "觉得「怎么不动」的时候，先看这里。"
+        ))
+
+        eventsView = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.parseColor("#455A64"))
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setTextIsSelectable(true)
+        }
+        root.addView(eventsView)
+
+        root.addView(Button(this).apply {
+            text = "刷新"
+            setOnClickListener { refreshEvents() }
+        })
 
         root.addView(divider())
 
@@ -772,6 +806,32 @@ class MainActivity : Activity() {
             if (box.tag == TAG_SEEN && box.isChecked) out += box.text.toString()
         }
         return out
+    }
+
+
+    /**
+     * 把运行记录显示出来。
+     *
+     * 空记录本身就是最重要的一条信息：说明通知根本没进来，
+     * 问题在授权或者省电策略上，而不是在回复逻辑上。
+     */
+    private fun refreshEvents() {
+        val events = Storage.loadEvents(this)
+        if (events.isEmpty()) {
+            eventsView.text = if (isNotificationAccessGranted()) {
+                "还没有任何记录。\n\n" +
+                    "让人给你发条微信试试。如果发了还是空的，多半是：\n" +
+                    "• 通知使用权被系统收回了 —— 去上面重新授权一次\n" +
+                    "• 或者手机把这个 App 杀了 —— 把它加进省电白名单"
+            } else {
+                "还没授予通知使用权，程序看不到任何微信消息。\n" +
+                    "点上面那个按钮先授权。"
+            }
+            eventsView.setTextColor(Color.parseColor("#D32F2F"))
+            return
+        }
+        eventsView.text = events.joinToString("\n")
+        eventsView.setTextColor(Color.parseColor("#455A64"))
     }
 
     /** 中英文逗号都当分隔符——用户不该被要求分清全角半角。 */
