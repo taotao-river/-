@@ -189,9 +189,80 @@ echo
 "$REPO_DIR/.venv/bin/python" macos/wechat_mac_bot.py --doctor
 echo
 echo "=========================================================="
-echo "  上面如果全是 [OK]，就可以双击「2 试运行」了。"
-echo "  如果出现 [X ]，把这个窗口整个截图发给帮你配置的人。"
+echo "  看最后那几行：出现 ✅ 就可以双击「2 试运行」了。"
+echo "  出现 ❌ 就把这个窗口整个截图发给帮你配置的人。"
 echo "=========================================================="
+echo
+read -n 1 -s -r -p "按任意键关闭..."
+EOF
+
+# 更新程序。
+#
+# 没有这个的话，我这边改了代码，用户这边是拿不到的——他不会用 git，
+# 而 /usr/bin/git 在没装开发者工具的机器上又是个会弹窗的占位符。
+# 所以走 curl + unzip：这两个是 macOS 自带的真程序，不弹任何东西。
+#
+# 只覆盖代码，绝不碰 core/config.yaml（你答的那套回复内容）
+# 和 .wxauto_token（密码），那两个丢了要重来一遍。
+cat > "0 更新程序.command" <<'EOF'
+#!/bin/bash
+cd "$(dirname "$0")" || exit 1
+clear
+echo "=========================================================="
+echo "  更新到最新版本"
+echo "  你答过的问题和生成的回复内容不会丢"
+echo "=========================================================="
+echo
+
+ZIP_URL="https://github.com/taotao-river/wechat-auto-reply/archive/refs/heads/main.zip"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+echo "  正在下载..."
+if ! curl -fsSL --max-time 120 -o "$TMP/main.zip" "$ZIP_URL"; then
+    echo
+    echo "  ❌ 下载失败。多半是网络问题，过一会儿再试一次。"
+    echo
+    read -n 1 -s -r -p "按任意键关闭..."
+    exit 1
+fi
+
+if ! unzip -q -o "$TMP/main.zip" -d "$TMP"; then
+    echo "  ❌ 解压失败。"
+    read -n 1 -s -r -p "按任意键关闭..."
+    exit 1
+fi
+
+SRC="$(find "$TMP" -maxdepth 1 -type d -name 'wechat-auto-reply-*' | head -1)"
+if [ -z "$SRC" ] || [ ! -d "$SRC/core" ]; then
+    echo "  ❌ 下载到的内容不对，没动你的文件。"
+    read -n 1 -s -r -p "按任意键关闭..."
+    exit 1
+fi
+
+# 先把要保住的东西挪到一边
+SAVE="$TMP/save"
+mkdir -p "$SAVE"
+[ -f core/config.yaml ] && cp core/config.yaml "$SAVE/config.yaml"
+
+echo "  正在更新代码..."
+for d in core macos server; do
+    [ -d "$SRC/$d" ] && mkdir -p "$d" && cp -R "$SRC/$d/." "$d/"
+done
+[ -f "$SRC/安装到Mac.command" ] && cp "$SRC/安装到Mac.command" . && chmod +x "安装到Mac.command"
+
+# 放回去。config.yaml 是你答问题生成的，压缩包里那份是示例，不能盖掉
+[ -f "$SAVE/config.yaml" ] && cp "$SAVE/config.yaml" core/config.yaml
+
+# 后台服务在跑旧代码，重启一下
+PLIST="$HOME/Library/LaunchAgents/com.wxauto.server.plist"
+if [ -f "$PLIST" ]; then
+    launchctl unload "$PLIST" 2>/dev/null
+    launchctl load "$PLIST" 2>/dev/null
+fi
+
+echo
+echo "  ✅ 更新好了。现在可以双击「1 检查微信」。"
 echo
 read -n 1 -s -r -p "按任意键关闭..."
 EOF
@@ -242,8 +313,9 @@ echo
 exec caffeinate -i "$REPO_DIR/.venv/bin/python" macos/wechat_mac_bot.py
 EOF
 
-chmod +x "1 检查微信.command" "2 试运行（不真发消息）.command" \
-        "3 开始自动回复.command" "查看联系人名字.command"
+chmod +x "0 更新程序.command" "1 检查微信.command" \
+        "2 试运行（不真发消息）.command" "3 开始自动回复.command" \
+        "查看联系人名字.command"
 echo "      好了"
 
 # ---------------------------------------------------------- 授权引导

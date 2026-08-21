@@ -145,107 +145,134 @@ on run argv
 end run
 """
 
-# 诊断用：把微信的辅助功能树打出来。
-# 选择器随微信版本变化，出问题时靠这个定位，而不是靠猜。
+# 诊断用：把微信的辅助功能树整棵打出来。
+#
+# 原来这里是「按写死的路径逐段探测」，断在哪就报哪一段。那样只能回答
+# 「我猜的路径对不对」，回答不了真正要紧的那个问题：这棵树里到底有没有
+# 东西。微信 Mac 4.x 是重写过的客户端，有的版本除了窗口那三个红黄绿
+# 按钮之外什么都不暴露——这种情况下换选择器是白费力气，得先分清楚是
+# 「路径写错了」还是「压根没有树」。
+#
+# 所以改成递归遍历，并统计有多少个表格/滚动区/文本框。
+# 深度和条数都设了上限，免得在大界面上跑到超时。
 _DOCTOR = """
-tell application "System Events"
-    if not (exists process "WeChat") then return "微信没在运行。先打开并登录 macOS 版微信。"
-    tell process "WeChat"
-        set out to "微信进程: 在运行" & return
-        set out to out & "窗口数: " & (count of windows) & return
-        if (count of windows) = 0 then
-            return out & return & "微信在运行但没有打开的窗口——点一下 Dock 里的微信图标把主窗口调出来。"
+global gOut, gCount, gTables, gScrolls, gTextAreas, gStatics
+
+on dumpEl(el, depth)
+    -- 顶层已经 global 过一次了，处理器里再声明一次是稳妥写法：
+    -- 少了它，下面的赋值会变成处理器内的局部变量，统计永远是 0
+    global gOut, gCount, gTables, gScrolls, gTextAreas, gStatics
+
+    if gCount > 120 then return
+    set gCount to gCount + 1
+
+    set pad to ""
+    repeat depth times
+        set pad to pad & "  "
+    end repeat
+    set entryLine to pad & "- "
+
+    tell application "System Events"
+        set klass to "?"
+        try
+            set klass to (class of el as text)
+        end try
+        set entryLine to entryLine & klass
+
+        if klass contains "table" then set gTables to gTables + 1
+        if klass contains "scroll" then set gScrolls to gScrolls + 1
+        if klass contains "text area" then set gTextAreas to gTextAreas + 1
+        if klass contains "static text" then set gStatics to gStatics + 1
+
+        try
+            set d to (description of el) as text
+            if d is not "" then set entryLine to entryLine & " desc=" & d
+        end try
+        try
+            set nm to (name of el) as text
+            if nm is not "" then set entryLine to entryLine & " name=" & nm
+        end try
+        try
+            set vs to (value of el) as text
+            if length of vs > 24 then set vs to (text 1 thru 24 of vs) & "…"
+            if vs is not "" then set entryLine to entryLine & " value=" & vs
+        end try
+
+        set kids to {}
+        if depth < 5 then
+            try
+                set kids to UI elements of el
+            end try
         end if
-
-        try
-            set out to out & "窗口1 名称: " & (name of window 1) & return
-        end try
-
-        set out to out & return & "=== 第 1 层：窗口1 的直接子元素 ===" & return
-        try
-            repeat with e in UI elements of window 1
-                set entryLine to "  " & (class of e as text)
-                try
-                    set entryLine to entryLine & "  desc=" & (description of e)
-                end try
-                set out to out & entryLine & return
-            end repeat
-        on error errMsg
-            set out to out & "  读不到：" & errMsg & return
-        end try
-
-        set out to out & return & "=== 第 2 层：splitter group 1 里有什么 ===" & return
-        try
-            repeat with e in UI elements of splitter group 1 of window 1
-                set entryLine to "  " & (class of e as text)
-                try
-                    set entryLine to entryLine & "  desc=" & (description of e)
-                end try
-                set out to out & entryLine & return
-            end repeat
-        on error errMsg
-            set out to out & "  没有 splitter group 1：" & errMsg & return
-        end try
-
-        set out to out & return & "=== 关键路径逐段探测 ===" & return
-
-        try
-            set sg to splitter group 1 of window 1
-            set out to out & "  [OK] splitter group 1" & return
-        on error
-            set out to out & "  [X ] splitter group 1  <- 断在这里" & return
-            return out
-        end try
-
-        try
-            set sa to scroll area 1 of sg
-            set out to out & "  [OK] scroll area 1" & return
-        on error
-            set out to out & "  [X ] scroll area 1  <- 断在这里" & return
-            return out
-        end try
-
-        try
-            set tb to table 1 of sa
-            set out to out & "  [OK] table 1（会话列表）" & return
-        on error
-            set out to out & "  [X ] table 1  <- 断在这里" & return
-            return out
-        end try
-
-        try
-            set rowCount to count of rows of tb
-            set out to out & "  [OK] 会话列表有 " & rowCount & " 行" & return
-        on error errMsg
-            set out to out & "  [X ] 读不到行：" & errMsg & return
-            return out
-        end try
-
-        set out to out & return & "=== 前 3 个会话读出来长什么样 ===" & return
-        try
-            set n to 0
-            repeat with r in rows of tb
-                set n to n + 1
-                if n > 3 then exit repeat
-                try
-                    set labels to value of static texts of UI element 1 of r
-                    set out to out & "  会话 " & n & ": " & (item 1 of labels) & return
-                    try
-                        set out to out & "         desc=" & (description of r) & return
-                    end try
-                on error errMsg
-                    set out to out & "  会话 " & n & " 读不出名字：" & errMsg & return
-                end try
-            end repeat
-        end try
-
-        return out
     end tell
+
+    set gOut to gOut & entryLine & return
+
+    repeat with k in kids
+        dumpEl(k, depth + 1)
+    end repeat
+end dumpEl
+
+
+set gOut to ""
+set gCount to 0
+set gTables to 0
+set gScrolls to 0
+set gTextAreas to 0
+set gStatics to 0
+
+tell application "System Events"
+    if not (exists process "WeChat") then
+        return "微信没在运行。先打开并登录 macOS 版微信。"
+    end if
+    set winCount to count of windows of process "WeChat"
+    set gOut to "微信进程: 在运行" & return & "窗口数: " & winCount & return
+    if winCount = 0 then
+        return gOut & return & "微信在运行但没有打开的窗口——点一下 Dock 里的微信图标把主窗口调出来。"
+    end if
+
+    -- 有些重写过的客户端（Electron、自研跨平台框架）默认不生成完整的
+    -- 辅助功能树，只有被明确要求时才生成。这是两个已知的开关，
+    -- 平时由读屏软件负责打开。试一下，成不成都不影响后面。
+    set switchNote to "没打开（这个版本不认这两个开关）"
+    try
+        set value of attribute "AXManualAccessibility" of application process "WeChat" to true
+        set switchNote to "AXManualAccessibility 打开了"
+    end try
+    try
+        set value of attribute "AXEnhancedUserInterface" of application process "WeChat" to true
+        set switchNote to switchNote & " / AXEnhancedUserInterface 打开了"
+    end try
+    delay 1.5
+    set gOut to gOut & "辅助功能增强开关: " & switchNote & return
+
+    set w to window 1 of process "WeChat"
+    try
+        set gOut to gOut & "窗口1 名称: " & (name of w) & return
+    end try
 end tell
+
+set gOut to gOut & return & "=== 界面树（最多 5 层 / 120 个元素）===" & return
+dumpEl(w, 0)
+
+set gOut to gOut & return & "=== 统计 ===" & return
+set gOut to gOut & "  元素总数: " & gCount & return
+set gOut to gOut & "  表格(table): " & gTables & return
+set gOut to gOut & "  滚动区(scroll area): " & gScrolls & return
+set gOut to gOut & "  输入框(text area): " & gTextAreas & return
+set gOut to gOut & "  文字(static text): " & gStatics & return
+
+if gCount <= 6 or (gTables = 0 and gStatics = 0) then
+    set gOut to gOut & return & "VERDICT:EMPTY" & return
+else
+    set gOut to gOut & return & "VERDICT:HASTREE" & return
+end if
+
+return gOut
 """
 
 
-def run_applescript(script: str, *args: str) -> str:
+def run_applescript(script: str, *args: str, timeout: float = 30) -> str:
     """执行 AppleScript。失败返回以 ERR: 开头的字符串，绝不抛给主循环。"""
     try:
         result = subprocess.run(
@@ -253,7 +280,7 @@ def run_applescript(script: str, *args: str) -> str:
             input=script,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         return "ERR:AppleScript 执行超时"
@@ -406,22 +433,53 @@ def contacts() -> int:
     return 0
 
 
+def wechat_version() -> str:
+    """读 Mac 版微信的版本号。
+
+    这条信息比界面树本身还关键：微信 Mac 4.x 是重写过的客户端，
+    3.x 和 4.x 的辅助功能暴露程度完全不同。不知道版本号，
+    「读不到会话列表」就没法判断是选择器过时了还是这条路本身走不通。
+    """
+    try:
+        result = subprocess.run(
+            [
+                "defaults",
+                "read",
+                "/Applications/WeChat.app/Contents/Info.plist",
+                "CFBundleShortVersionString",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return "读不到"
+    return result.stdout.strip() or "读不到"
+
+
 def doctor() -> int:
     """把微信的界面结构打出来。
 
     这个方案靠读辅助功能树定位控件，而那个树的结构随微信版本变化。
     出问题时不该让用户对着「找不到会话列表」干瞪眼——把实际看到的
     结构打出来，才有得改。
+
+    但更要紧的是分清两种失败：树在那儿只是路径写错了（能改），
+    还是微信压根不暴露界面结构（改不了）。所以这里不再只报
+    「断在哪一段」，而是报整棵树有多大。
     """
     print()
     print("=" * 56)
     print("  微信界面结构诊断")
     print("=" * 56)
     print()
-    print("  如果下面有 [X ]，把从这行往下的全部内容复制给帮你配置的人。")
+
+    version = wechat_version()
+    print(f"  微信版本：{version}")
     print()
 
-    output = run_applescript(_DOCTOR)
+    # 遍历整棵树要挨个查属性，元素多的时候比普通调用慢不少，给足时间
+    output = run_applescript(_DOCTOR, timeout=120)
     if output.startswith("ERR:"):
         print(f"  执行失败：{output[4:]}")
         print()
@@ -430,14 +488,33 @@ def doctor() -> int:
         print("  勾了之后要把终端完全退出（⌘Q）再重开，授权才生效。")
         return 1
 
-    print(output)
+    verdict_empty = "VERDICT:EMPTY" in output
+    print(output.replace("VERDICT:EMPTY", "").replace("VERDICT:HASTREE", "").rstrip())
     print()
-    if "[X ]" in output:
-        print("  ⚠️ 上面有断掉的地方，说明你的微信版本和代码里的选择器对不上。")
-        print("     把这整段输出发给帮你配置的人，改几行就能适配。")
+
+    if verdict_empty:
+        print("  " + "=" * 52)
+        print("  ❌ 微信没有把界面结构暴露给系统的辅助功能接口。")
+        print("  " + "=" * 52)
+        print()
+        print("  上面除了窗口那几个按钮之外基本什么都没有——会话列表、")
+        print("  聊天内容、输入框，一个都读不到。这不是选择器写错了，")
+        print("  改几行代码解决不了。")
+        print()
+        print("  在放弃之前，还有两件事值得试：")
+        print()
+        print("    1) 确认微信主窗口真的开着（不是缩在 Dock 里、")
+        print("       也不是只剩一个小的聊天窗），然后重新跑一次本检查。")
+        print()
+        print("    2) 如果你装的是微信 4.x，试试装回 3.8.x 版本。")
+        print("       4.x 是重写过的客户端，很多自动化都是在它上面失效的。")
+        print()
+        print("  两条都不行的话，Mac 这条路在你这台机器上就是走不通的，")
+        print("  该换方案了——把这个窗口整个截图发给帮你配置的人。")
         return 1
 
-    print("  ✅ 界面结构对得上，可以继续跑 --dry-run 了。")
+    print("  ✅ 读得到界面结构。把这段输出发给帮你配置的人，")
+    print("     对着实际的树把选择器调准，就能继续跑 --dry-run 了。")
     return 0
 
 
