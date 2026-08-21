@@ -129,7 +129,11 @@ class MainActivity : Activity() {
             checkedSeenContacts() + splitList(allowContactsField.text.toString())
         )
 
-        masterSwitch.isChecked = Storage.loadConfig(this).enabled
+        // 只在真的不一致时才改（比如刚用下拉磁贴关掉了）。
+        // 无条件赋值会触发 setOnCheckedChangeListener，于是每次切回
+        // 这个界面都弹一次「自动回复已开启」，看着像出了什么事。
+        val enabled = Storage.loadConfig(this).enabled
+        if (masterSwitch.isChecked != enabled) masterSwitch.isChecked = enabled
     }
 
     // ------------------------------------------------------------------ 界面
@@ -184,6 +188,21 @@ class MainActivity : Activity() {
         root.addView(hint(
             "刚更新过 App、或者手机重启过之后，系统有时会把监听停掉。" +
                 "下面「最近发生了什么」一直是空的，就点一下这个。"
+        ))
+
+        // 兜底方案的入口。原来只在日志里写「可以试试开无障碍兜底」，
+        // 却没有任何地方能开——等于没有这条退路。
+        // 放在这里而不是更显眼的位置：无障碍权限很大，能不开就别开。
+        root.addView(Button(this).apply {
+            text = "备用方案：无障碍回复（一般用不上）"
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+        })
+        root.addView(hint(
+            "只有当上面的记录里反复出现「这条通知没有回复按钮」时才需要开它。\n" +
+                "⚠️ 无障碍权限能读到屏幕上的全部内容，权限很大；" +
+                "而且开了之后必须让微信停在聊天页面才回得了。能不开就别开。"
         ))
 
         root.addView(divider())
@@ -291,7 +310,9 @@ class MainActivity : Activity() {
         }
         root.addView(allowContactsField)
         root.addView(hint(
-            "手打的话，填你在微信里看到的那个名字——**设了备注就填备注名**，" +
+            "上面的勾选框一勾就生效，不用再点保存。\n" +
+                "手打的名字要点页面最下面的「保存设置」才算数。\n\n" +
+                "手打的话，填你在微信里看到的那个名字——**设了备注就填备注名**，" +
                 "没设备注就填昵称。不是微信号。\n" +
                 "多余的空格和大小写不影响匹配。"
         ))
@@ -803,8 +824,10 @@ class MainActivity : Activity() {
                 text = name
                 textSize = 16f
                 tag = TAG_SEEN
+                // 先设好状态再挂监听，否则这一行本身会触发一次「保存」
                 isChecked = normalizeChatName(name) in picked
                 setPadding(dp(8), dp(10), dp(8), dp(10))
+                setOnCheckedChangeListener { _, _ -> saveWhitelistOnly() }
             })
         }
 
@@ -814,6 +837,19 @@ class MainActivity : Activity() {
         allowContactsField.setText(
             selected.filter { normalizeChatName(it) !in seenNorm }.joinToString("，")
         )
+    }
+
+    /**
+     * 勾选框一勾上就立刻存，不等页面底部那个「保存设置」。
+     *
+     * 「保存设置」在页面最下面，勾选框在中间。用户勾完几个人，
+     * 觉得事儿办完了就退出去——设置一条没存上，而且没有任何提示。
+     * 白名单又恰恰是防封号最关键的一项，丢了后果最严重，
+     * 所以这里单独即时落盘。
+     */
+    private fun saveWhitelistOnly() {
+        val names = checkedSeenContacts() + splitList(allowContactsField.text.toString())
+        Storage.saveConfig(this, Storage.loadConfig(this).copy(allowContacts = names))
     }
 
     private fun checkedSeenContacts(): List<String> {

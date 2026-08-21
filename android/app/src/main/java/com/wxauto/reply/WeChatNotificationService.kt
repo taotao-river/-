@@ -110,19 +110,7 @@ class WeChatNotificationService : NotificationListenerService() {
             return
         }
 
-        // 群消息的通知正文形如「张三: 内容」，私聊直接是内容
-        val colonIndex = rawText.indexOf(": ")
-        val looksLikeGroup = chatName.contains("(") && chatName.contains(")")
-        val isGroup = looksLikeGroup || (colonIndex in 1..30)
-        val senderName: String
-        val text: String
-        if (isGroup && colonIndex in 1..30) {
-            senderName = rawText.substring(0, colonIndex)
-            text = rawText.substring(colonIndex + 2)
-        } else {
-            senderName = chatName
-            text = rawText
-        }
+        val (isGroup, senderName, text) = splitGroupMessage(extras, chatName, rawText)
 
         // 引擎判断和延迟发送都不能占用通知回调线程
         executor.execute {
@@ -158,7 +146,10 @@ class WeChatNotificationService : NotificationListenerService() {
         if (!decision.shouldReply || decision.text == null) {
             // 把原因记下来给用户看。不记的话，「为什么不回」在手机上
             // 是完全查不到的——用户只能看到「没反应」。
-            Storage.recordEvent(this, "「$chatName」不回复：${decision.reason}")
+            // 带上「群/私聊」：群聊默认不回，而私聊被误判成群是个真实存在的
+            // 失败模式，不标出来的话用户只会看到「群消息不回」而莫名其妙
+            val kind = if (isGroup) "群" else "私聊"
+            Storage.recordEvent(this, "[$kind]「$chatName」不回复：${decision.reason}")
             Log.i(TAG, "不回复「$chatName」：${decision.reason}")
             return
         }
@@ -179,18 +170,68 @@ class WeChatNotificationService : NotificationListenerService() {
             return
         }
 
-        sendReply(action, decision.text)
-        Storage.recordEvent(this, "已回复「$chatName」：${decision.text}")
-        Log.i(TAG, "已回复「$chatName」：${decision.text}")
+        if (sendReply(action, decision.text)) {
+            Storage.recordEvent(this, "已回复「$chatName」：${decision.text}")
+            Log.i(TAG, "已回复「$chatName」：${decision.text}")
+        } else {
+            // 等了几十秒才发，期间对方那条通知可能已经被用户点掉了，
+            // 回复入口随之失效。这条路径不算少见，不能记成「已回复」。
+            Storage.recordEvent(
+                this,
+                "「$chatName」没发出去：等待期间那条通知已经失效（多半是你自己点开看过了）",
+            )
+        }
+    }
+
+    /**
+     * 判断是不是群消息，并把「张三: 内容」拆成发送人和正文。
+     *
+     * 判错的代价不对称，所以优先用系统给的确定信息：
+     *   - 判成群 → 默认策略是「群消息不回」，于是私聊被静默吞掉
+     *   - 判成私聊 → 可能往群里发消息，刷屏且更容易触发风控
+     *
+     * 所以顺序是：先看系统的 EXTRA_IS_GROUP_CONVERSATION（微信设了就直接用），
+     * 再看群名末尾的成员数「(8)」，最后才退回「冒号前像个名字」这个猜测。
+     * 最后那条会误伤——私聊里说一句「好的: 明天见」就中招——所以把
+     * 前缀限制得严一些：短、且不含句子标点。
+     */
+    private fun splitGroupMessage(
+        extras: Bundle,
+        chatName: String,
+        rawText: String,
+    ): Triple<Boolean, String, String> {
+        val colonIndex = rawText.indexOf(": ")
+        val prefix = if (colonIndex in 1..20) rawText.substring(0, colonIndex) else null
+        // 名字里不会有句末标点，正文里很容易有
+        val prefixLooksLikeName = prefix != null &&
+            prefix.none { it in "，。？！,.?!；;" }
+
+        // 这个常量是 API 28 才有的，但它只是个字符串常量，编译期就内联进来了，
+        // 安卓 8 上不会崩——读不到就是 false，自动退回下面的猜测。
+        val systemSaysGroup = extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION, false)
+        val nameHasMemberCount = Regex("""[（(]\s*\d+\s*[)）]\s*$""").containsMatchIn(chatName)
+        val isGroup = systemSaysGroup || nameHasMemberCount || prefixLooksLikeName
+
+        return if (isGroup && prefix != null) {
+            Triple(true, prefix, rawText.substring(colonIndex + 2))
+        } else {
+            Triple(isGroup, chatName, rawText)
+        }
     }
 
     /** 在通知的 actions 里找带 RemoteInput 的那个，就是「回复」按钮。 */
     private fun findReplyAction(notification: Notification): Notification.Action? =
         notification.actions?.firstOrNull { it.remoteInputs?.isNotEmpty() == true }
 
-    /** 把文字塞进 RemoteInput 并触发 —— 等价于用户在通知栏里打字回复。 */
-    private fun sendReply(action: Notification.Action, text: String) {
-        val remoteInputs = action.remoteInputs ?: return
+    /**
+     * 把文字塞进 RemoteInput 并触发 —— 等价于用户在通知栏里打字回复。
+     *
+     * 返回是否真的发出去了。调用方必须按这个结果记录，
+     * 不能不管三七二十一都记「已回复」——那样日志会骗人，
+     * 而这个日志正是用户唯一能自查的东西。
+     */
+    private fun sendReply(action: Notification.Action, text: String): Boolean {
+        val remoteInputs = action.remoteInputs ?: return false
         val bundle = Bundle()
         for (input in remoteInputs) {
             bundle.putCharSequence(input.resultKey, text)
@@ -199,11 +240,13 @@ class WeChatNotificationService : NotificationListenerService() {
         val intent = Intent()
         RemoteInput.addResultsToIntent(remoteInputs, intent, bundle)
 
-        try {
+        return try {
             action.actionIntent.send(this, 0, intent)
+            true
         } catch (e: PendingIntent.CanceledException) {
             // 通知被划掉或已过期，重发没有意义
             Log.w(TAG, "回复入口已失效：${e.message}")
+            false
         }
     }
 

@@ -55,10 +55,19 @@
             </intent-filter>
         </service>
 
-        <!-- 兜底：无障碍操作界面。用户不开也不影响主力方案 -->
+        <!--
+          兜底：无障碍操作界面。用户不开也不影响主力方案。
+
+          这里必须 exported="true"，和上面的通知监听恰好相反：
+          官方文档对两者的要求就是不一样的（通知监听是 false）。
+          写成 false 的后果是这个服务压根不出现在「无障碍」设置列表里，
+          用户想开也开不了——正是通知里没有「回复」按钮时唯一的退路。
+          真正的越权由 BIND_ACCESSIBILITY_SERVICE 挡着：
+          只有系统持有这个权限，别的 App 绑不上来。
+        -->
         <service
             android:name=".WeChatAccessibilityService"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
