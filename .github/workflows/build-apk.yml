@@ -50,6 +50,14 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
+      # Release 的标签 latest 只建过一次，之后每次构建只是把里面的文件换掉。
+      # GitHub 的发布页显示的是**标签创建时间**，不是文件上传时间，
+      # 所以那个日期会永远停在第一次发布那天——看着就像很久没更新了。
+      # 把构建时间写进标题里，一眼能分辨新旧。
+      - name: 记下构建时间
+        id: buildtime
+        run: echo "stamp=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> "$GITHUB_OUTPUT"
+
       - name: 重命名产物
         run: |
           mkdir -p dist
@@ -91,7 +99,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: 最新版（手机上直接点就能装）
+          name: 安卓版 APK · ${{ steps.buildtime.outputs.stamp }} 更新
           make_latest: true
           body: |
             ## 手机上怎么装
@@ -107,8 +115,19 @@ jobs:
 
             ---
 
+            **⚠️ 这里只有安卓的 APK，没有 Mac 的东西。**
+            Mac 版要从仓库首页绿色的 **Code → Download ZIP** 拿，
+            或者用文件夹里的「0 更新程序.command」。
+
+            ---
+
+            **本次构建时间：${{ steps.buildtime.outputs.stamp }}（北京时间）**
+
+            页面上方那个「latest」标签的日期是第一次发布时留下的，
+            不会跟着更新——以这一行为准。
+
             这是 debug 签名的版本，只能这样直接安装，不在应用商店里。
-            自动构建于 ${{ github.sha }}
+            对应代码：${{ github.sha }}
           files: |
             dist/wechat-auto-reply.apk
 
